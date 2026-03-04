@@ -34,6 +34,10 @@ func Run(args []string) int {
 		err = cmdSubject(args[1:])
 	case "session":
 		err = cmdSession()
+	case "sessions":
+		err = cmdSessions()
+	case "current-session":
+		err = cmdCurrentSession(args[1:])
 	case "status":
 		err = cmdStatus(true)
 	case "publish":
@@ -62,6 +66,8 @@ Commands:
   init
   subject create|edit|search|print|ls|rm
   session
+  sessions
+  current-session advance [--session <slug>]
   status
   publish
   ingest-photos`)
@@ -326,31 +332,11 @@ func cmdSession() error {
 	if len(protocol.Steps) == 0 {
 		return errors.New("no protocol steps found")
 	}
-
-	today := time.Now().Format("02-01-2006")
-	surnames := make([]string, 0, len(selected))
-	subjectIDs := make([]string, 0, len(selected))
-	for _, s := range selected {
-		surnames = append(surnames, util.Slugify(lastToken(s.Name)))
-		subjectIDs = append(subjectIDs, s.UUID)
-	}
-	sessionSlug := fmt.Sprintf("%s-%s", today, strings.Join(surnames, "-"))
-	sessionDir := filepath.Join(root, "session", sessionSlug)
-	if err := util.EnsureDir(filepath.Join(sessionDir, "step")); err != nil {
+	_, sessionDir, err := createSessionScaffold(root, selected)
+	if err != nil {
 		return err
 	}
 	sessionPath := filepath.Join(sessionDir, "session.sg.md")
-	subjectLines := make([]string, 0, len(selected))
-	for _, s := range selected {
-		subjectLines = append(subjectLines, fmt.Sprintf("- %s (%s)", s.Name, s.UUID))
-	}
-	sfm := map[string]any{
-		"time_started": util.NowTimestamp(),
-		"subject_ids":  subjectIDs,
-	}
-	if err := util.WriteFrontmatterFile(sessionPath, sfm, "# Subjects\n\n"+strings.Join(subjectLines, "\n")+"\n\n# Notes\n"); err != nil {
-		return err
-	}
 
 	var prevStepPath string
 	for i, step := range protocol.Steps {
@@ -370,8 +356,6 @@ func cmdSession() error {
 		}
 		stepPath := filepath.Join(stepDir, "step.sg.md")
 		fm := map[string]any{
-			"step_name":    step.Name,
-			"step_slug":    step.Slug,
 			"time_started": util.NowTimestamp(),
 		}
 		if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
@@ -395,6 +379,459 @@ func cmdSession() error {
 	}
 	fmt.Println("session complete:", sessionDir)
 	return nil
+}
+
+func cmdSessions() error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("no protocol steps found")
+	}
+	return runSessionsSwitchboard(root, protocol)
+}
+
+func cmdCurrentSession(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: sg current-session advance [--session <slug>]")
+	}
+	switch args[0] {
+	case "advance":
+		return cmdCurrentSessionAdvance(args[1:])
+	default:
+		return fmt.Errorf("unknown current-session subcommand: %s", args[0])
+	}
+}
+
+func cmdCurrentSessionAdvance(args []string) error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("no protocol steps found")
+	}
+
+	sessionSlug, err := parseCurrentSessionAdvanceArgs(args)
+	if err != nil {
+		return err
+	}
+	if sessionSlug == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		inferred, ok := inferSessionSlugFromCwd(root, cwd)
+		if !ok {
+			return errors.New("could not infer session from current directory; pass --session <slug>")
+		}
+		sessionSlug = inferred
+	}
+
+	res, err := advanceSessionOnce(root, sessionSlug, protocol)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("session=%s state=%s step=%s\n", sessionSlug, res.State, res.StepSlug)
+	return nil
+}
+
+func parseCurrentSessionAdvanceArgs(args []string) (string, error) {
+	var sessionSlug string
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" {
+			continue
+		}
+		switch {
+		case arg == "--session":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return "", errors.New("missing value for --session")
+			}
+			sessionSlug = strings.TrimSpace(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--session="):
+			sessionSlug = strings.TrimSpace(strings.TrimPrefix(arg, "--session="))
+			if sessionSlug == "" {
+				return "", errors.New("missing value for --session")
+			}
+		default:
+			return "", fmt.Errorf("unknown argument: %s", arg)
+		}
+	}
+	return sessionSlug, nil
+}
+
+func inferSessionSlugFromCwd(root, cwd string) (string, bool) {
+	sessionRoot := filepath.Join(root, "session")
+	rel, err := filepath.Rel(sessionRoot, cwd)
+	if err != nil {
+		return "", false
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" || parts[0] == "." {
+		return "", false
+	}
+	slug := parts[0]
+	info, err := os.Stat(filepath.Join(sessionRoot, slug))
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return slug, true
+}
+
+type sessionRecord struct {
+	Slug           string
+	SubjectNames   []string
+	CurrentStep    string
+	CurrentStepIdx int
+	ProgressSteps  int
+	StepCount      int
+	NextStep       string
+	Complete       bool
+	NextAction     string
+	InvalidReason  string
+}
+
+func loadSessionRecords(root string, protocol store.Protocol, subjectByID map[string]store.Subject) ([]sessionRecord, error) {
+	slugs, err := listSessionSlugs(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	incomplete := make([]sessionRecord, 0, len(slugs))
+	complete := make([]sessionRecord, 0, len(slugs))
+	for _, slug := range slugs {
+		sessionPath := filepath.Join(root, "session", slug, "session.sg.md")
+		sfm, _, err := util.ReadFrontmatterFile(sessionPath)
+		if err != nil {
+			continue
+		}
+		subjectNames := make([]string, 0)
+		for _, id := range parseSubjectIDs(sfm["subject_ids"]) {
+			if s, ok := subjectByID[id]; ok {
+				subjectNames = append(subjectNames, s.Name)
+				continue
+			}
+			subjectNames = append(subjectNames, id)
+		}
+		rec := sessionRecord{
+			Slug:           slug,
+			SubjectNames:   subjectNames,
+			CurrentStepIdx: -1,
+			ProgressSteps:  0,
+			StepCount:      len(protocol.Steps),
+		}
+		progress, err := inspectSessionProgress(filepath.Join(root, "session", slug), protocol)
+		if err != nil {
+			rec.NextAction = "invalid"
+			rec.InvalidReason = err.Error()
+		} else {
+			rec.ProgressSteps = progress.ProgressSteps
+			if progress.ActiveStepIdx >= 0 && progress.ActiveStepIdx < len(protocol.Steps) {
+				rec.CurrentStep = protocol.Steps[progress.ActiveStepIdx].Name
+				rec.CurrentStepIdx = progress.ActiveStepIdx
+			}
+			rec.NextAction = progress.NextAction
+			switch progress.NextAction {
+			case "start":
+				target := progress.FirstUnstarted
+				if target < 0 {
+					target = 0
+				}
+				if target >= 0 && target < len(protocol.Steps) {
+					rec.NextStep = protocol.Steps[target].Name
+				}
+			case "advance":
+				target := progress.ActiveStepIdx + 1
+				if target >= 0 && target < len(protocol.Steps) {
+					rec.NextStep = protocol.Steps[target].Name
+				}
+			}
+			rec.Complete = progress.SessionFinished && progress.NextAction == "none"
+			if progress.SessionFinished && progress.NextAction != "none" {
+				rec.InvalidReason = "session marked finished but protocol steps are incomplete"
+			}
+		}
+		if rec.Complete {
+			complete = append(complete, rec)
+		} else {
+			incomplete = append(incomplete, rec)
+		}
+	}
+	return append(incomplete, complete...), nil
+}
+
+func sessionActionLabel(nextAction string) string {
+	switch nextAction {
+	case "start":
+		return "Start first step"
+	case "advance":
+		return "Advance to next step"
+	case "finish":
+		return "Finish session"
+	case "invalid":
+		return "Invalid session state"
+	default:
+		return "No action"
+	}
+}
+
+type sessionProgress struct {
+	ActiveStepIdx   int
+	FirstUnstarted  int
+	ProgressSteps   int
+	AnyStepStarted  bool
+	SessionFinished bool
+	NextAction      string
+}
+
+func inspectSessionProgress(sessionDir string, protocol store.Protocol) (sessionProgress, error) {
+	if len(protocol.Steps) == 0 {
+		return sessionProgress{}, errors.New("protocol has no steps")
+	}
+	sfm, _, err := util.ReadFrontmatterFile(filepath.Join(sessionDir, "session.sg.md"))
+	if err != nil {
+		return sessionProgress{}, err
+	}
+	p := sessionProgress{
+		ActiveStepIdx:   -1,
+		FirstUnstarted:  -1,
+		ProgressSteps:   0,
+		SessionFinished: strings.TrimSpace(asString(sfm["time_finished"])) != "",
+	}
+	startedFlags := make([]bool, len(protocol.Steps))
+	finishedFlags := make([]bool, len(protocol.Steps))
+	for i, st := range protocol.Steps {
+		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+		fm, _, err := util.ReadFrontmatterFile(stepPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if p.FirstUnstarted == -1 {
+					p.FirstUnstarted = i
+				}
+				continue
+			}
+			return sessionProgress{}, err
+		}
+		started := strings.TrimSpace(asString(fm["time_started"])) != ""
+		finished := strings.TrimSpace(asString(fm["time_finished"])) != ""
+		if !started {
+			if p.FirstUnstarted == -1 {
+				p.FirstUnstarted = i
+			}
+			if finished {
+				return sessionProgress{}, fmt.Errorf("invalid step timing (time_finished without time_started): %s", stepPath)
+			}
+			continue
+		}
+		p.AnyStepStarted = true
+		startedFlags[i] = true
+		finishedFlags[i] = finished
+	}
+
+	// Treat an earlier started step as effectively finished when a later step has started.
+	for i := range protocol.Steps {
+		if !startedFlags[i] {
+			if p.FirstUnstarted == -1 {
+				p.FirstUnstarted = i
+			}
+			continue
+		}
+		effectiveFinished := finishedFlags[i]
+		if !effectiveFinished {
+			for j := i + 1; j < len(protocol.Steps); j++ {
+				if startedFlags[j] {
+					effectiveFinished = true
+					break
+				}
+			}
+		}
+		if !effectiveFinished {
+			if p.ActiveStepIdx != -1 {
+				return sessionProgress{}, errors.New("multiple active steps found")
+			}
+			p.ActiveStepIdx = i
+			p.ProgressSteps++
+			continue
+		}
+		p.ProgressSteps++
+	}
+	lastIdx := len(protocol.Steps) - 1
+	switch {
+	case p.SessionFinished && p.FirstUnstarted >= 0:
+		p.NextAction = "invalid"
+	case p.SessionFinished:
+		p.NextAction = "none"
+	case p.ActiveStepIdx >= 0 && p.ActiveStepIdx < lastIdx:
+		p.NextAction = "advance"
+	case p.ActiveStepIdx == lastIdx:
+		p.NextAction = "finish"
+	case !p.AnyStepStarted:
+		p.NextAction = "start"
+	case p.FirstUnstarted >= 0:
+		p.NextAction = "start"
+	default:
+		p.NextAction = "finish"
+	}
+	return p, nil
+}
+
+type sessionAdvanceResult struct {
+	State    string
+	StepSlug string
+}
+
+func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sessionAdvanceResult, error) {
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	if info, err := os.Stat(sessionDir); err != nil || !info.IsDir() {
+		return sessionAdvanceResult{}, fmt.Errorf("session not found: %s", sessionSlug)
+	}
+	sessionPath := filepath.Join(sessionDir, "session.sg.md")
+	if _, err := os.Stat(sessionPath); err != nil {
+		return sessionAdvanceResult{}, fmt.Errorf("session missing file: %s", sessionPath)
+	}
+
+	progress, err := inspectSessionProgress(sessionDir, protocol)
+	if err != nil {
+		return sessionAdvanceResult{}, err
+	}
+	if progress.SessionFinished {
+		return sessionAdvanceResult{}, errors.New("session already finished")
+	}
+	now := util.NowTimestamp()
+	switch progress.NextAction {
+	case "start":
+		target := 0
+		if progress.FirstUnstarted >= 0 {
+			target = progress.FirstUnstarted
+		}
+		if err := startSessionStep(sessionDir, protocol.Steps[target], now); err != nil {
+			return sessionAdvanceResult{}, err
+		}
+		return sessionAdvanceResult{State: "started", StepSlug: protocol.Steps[target].Slug}, nil
+	case "advance":
+		if progress.ActiveStepIdx < 0 || progress.ActiveStepIdx >= len(protocol.Steps)-1 {
+			return sessionAdvanceResult{}, errors.New("cannot advance: no active step")
+		}
+		active := protocol.Steps[progress.ActiveStepIdx]
+		if err := finishSessionStep(sessionDir, active.Slug, now); err != nil {
+			return sessionAdvanceResult{}, err
+		}
+		next := protocol.Steps[progress.ActiveStepIdx+1]
+		if err := startSessionStep(sessionDir, next, now); err != nil {
+			return sessionAdvanceResult{}, err
+		}
+		return sessionAdvanceResult{State: "advanced", StepSlug: next.Slug}, nil
+	case "finish":
+		if progress.ActiveStepIdx >= 0 {
+			active := protocol.Steps[progress.ActiveStepIdx]
+			if err := finishSessionStep(sessionDir, active.Slug, now); err != nil {
+				return sessionAdvanceResult{}, err
+			}
+		}
+		if err := setFrontmatterField(sessionPath, "time_finished", now); err != nil {
+			return sessionAdvanceResult{}, err
+		}
+		lastStep := protocol.Steps[len(protocol.Steps)-1]
+		return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
+	default:
+		return sessionAdvanceResult{}, fmt.Errorf("session cannot transition from current state")
+	}
+}
+
+func startSessionStep(sessionDir string, step store.ProtocolStep, now string) error {
+	stepDir := filepath.Join(sessionDir, "step", step.Slug)
+	if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
+		return err
+	}
+	stepPath := filepath.Join(stepDir, "step.sg.md")
+	fm, body, err := util.ReadFrontmatterFile(stepPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		fm = map[string]any{}
+		body = ""
+	}
+	if strings.TrimSpace(asString(fm["time_started"])) != "" {
+		return fmt.Errorf("step already started: %s", step.Slug)
+	}
+	fm["time_started"] = now
+	delete(fm, "time_finished")
+	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+func finishSessionStep(sessionDir, stepSlug, now string) error {
+	stepPath := filepath.Join(sessionDir, "step", stepSlug, "step.sg.md")
+	fm, body, err := util.ReadFrontmatterFile(stepPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(asString(fm["time_started"])) == "" {
+		return fmt.Errorf("cannot finish step without time_started: %s", stepSlug)
+	}
+	fm["time_finished"] = now
+	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+func createSessionScaffold(root string, selected []store.Subject) (string, string, error) {
+	if len(selected) == 0 {
+		return "", "", errors.New("select at least one subject")
+	}
+	today := time.Now().Format("02-01-2006")
+	surnames := make([]string, 0, len(selected))
+	subjectIDs := make([]string, 0, len(selected))
+	for _, s := range selected {
+		surnames = append(surnames, util.Slugify(lastToken(s.Name)))
+		subjectIDs = append(subjectIDs, s.UUID)
+	}
+	baseSlug := fmt.Sprintf("%s-%s", today, strings.Join(surnames, "-"))
+	sessionSlug := uniqueSessionSlug(root, baseSlug)
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	if err := util.EnsureDir(filepath.Join(sessionDir, "step")); err != nil {
+		return "", "", err
+	}
+	subjectLines := make([]string, 0, len(selected))
+	for _, s := range selected {
+		subjectLines = append(subjectLines, fmt.Sprintf("- %s (%s)", s.Name, s.UUID))
+	}
+	sfm := map[string]any{
+		"time_started": util.NowTimestamp(),
+		"subject_ids":  subjectIDs,
+	}
+	if err := util.WriteFrontmatterFile(
+		filepath.Join(sessionDir, "session.sg.md"),
+		sfm,
+		"# Subjects\n\n"+strings.Join(subjectLines, "\n")+"\n\n# Notes\n",
+	); err != nil {
+		return "", "", err
+	}
+	return sessionSlug, sessionDir, nil
+}
+
+func uniqueSessionSlug(root, baseSlug string) string {
+	slug := baseSlug
+	for i := 2; ; i++ {
+		if _, err := os.Stat(filepath.Join(root, "session", slug)); os.IsNotExist(err) {
+			return slug
+		}
+		slug = fmt.Sprintf("%s-%d", baseSlug, i)
+	}
 }
 
 func selectSubjectsForSession() ([]store.Subject, error) {
@@ -530,12 +967,6 @@ func collectStatusIssues(root string) ([]string, error) {
 				if readErr != nil {
 					issues = append(issues, "session missing step file for protocol step "+step.Slug+": "+slug)
 					continue
-				}
-				if strings.TrimSpace(asString(stepFM["step_name"])) == "" {
-					issues = append(issues, "step missing required field step_name: "+stepPath)
-				}
-				if strings.TrimSpace(asString(stepFM["step_slug"])) == "" {
-					issues = append(issues, "step missing required field step_slug: "+stepPath)
 				}
 				if strings.TrimSpace(asString(stepFM["time_started"])) == "" {
 					issues = append(issues, "step missing time_started: "+stepPath)
@@ -685,8 +1116,8 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 			})
 			sort.Strings(imgRefs)
 			steps = append(steps, publishStep{
-				Name:      asString(stepFM["step_name"]),
-				Slug:      asString(stepFM["step_slug"]),
+				Name:      st.Name,
+				Slug:      st.Slug,
 				Started:   asString(stepFM["time_started"]),
 				Finished:  asString(stepFM["time_finished"]),
 				ImageRefs: imgRefs,
@@ -856,7 +1287,11 @@ func extractSection(md, name string) string {
 }
 
 func cmdIngestPhotos(args []string) error {
-	if runtime.GOOS != "darwin" {
+	opts, err := parseIngestPhotosArgs(args)
+	if err != nil {
+		return err
+	}
+	if opts.AssetsDir == "" && runtime.GOOS != "darwin" {
 		return errors.New("sg ingest-photos is supported only on macOS in v1")
 	}
 	root, err := util.StudyRootFromCwd()
@@ -878,65 +1313,141 @@ func cmdIngestPhotos(args []string) error {
 	if len(sessions) == 0 {
 		return errors.New("no sessions found")
 	}
-	selected, canceled, err := runSelect("Select session for ingest", sessions)
-	if err != nil {
-		return err
+
+	var exported []string
+	if opts.AssetsDir != "" {
+		exported, err = collectImageFiles(opts.AssetsDir)
+		if err != nil {
+			return err
+		}
+		if len(exported) == 0 {
+			fmt.Println("no photos found in assets dir", opts.AssetsDir)
+			return nil
+		}
+	} else {
+		tmpDir, err := os.MkdirTemp("", "sg-photos-*")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmpDir)
+
+		exported, err = exportPhotosFromApplePhotosFn(opts.AlbumName, tmpDir)
+		if err != nil {
+			return err
+		}
+		if len(exported) == 0 {
+			fmt.Println("no photos exported from album", opts.AlbumName)
+			return nil
+		}
 	}
-	if canceled {
+
+	total := ingestStats{}
+	for _, session := range sessions {
+		sessionDir := filepath.Join(root, "session", session)
+		windows, err := loadStepWindows(sessionDir, protocol)
+		if err != nil {
+			return fmt.Errorf("session %s: %w", session, err)
+		}
+		stats, err := ingestPhotosForSession(sessionDir, windows, exported, exifCaptureTimeFn, func(msg string, a ...any) {
+			fmt.Printf("session=%s ", session)
+			fmt.Printf(msg, a...)
+		})
+		if err != nil {
+			return fmt.Errorf("session %s: %w", session, err)
+		}
+		total.Copied += stats.Copied
+		total.SkippedDup += stats.SkippedDup
+		total.SkippedNoEXIF += stats.SkippedNoEXIF
+		total.SkippedWindow += stats.SkippedWindow
+		fmt.Printf("session %s: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", session, stats.Copied, stats.SkippedDup, stats.SkippedNoEXIF, stats.SkippedWindow)
+	}
+	fmt.Printf("ingest complete: sessions=%d copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", len(sessions), total.Copied, total.SkippedDup, total.SkippedNoEXIF, total.SkippedWindow)
+	return nil
+}
+
+func parseIngestPhotosArgs(args []string) (ingestPhotosOptions, error) {
+	opts := ingestPhotosOptions{AlbumName: "SG Ingest"}
+	seenAlbum := false
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" {
+			continue
+		}
+		switch {
+		case arg == "--assets-dir":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("missing value for --assets-dir")
+			}
+			opts.AssetsDir = strings.TrimSpace(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--assets-dir="):
+			opts.AssetsDir = strings.TrimSpace(strings.TrimPrefix(arg, "--assets-dir="))
+			if opts.AssetsDir == "" {
+				return opts, errors.New("missing value for --assets-dir")
+			}
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			if seenAlbum {
+				return opts, errors.New("only one album name positional argument is allowed")
+			}
+			opts.AlbumName = arg
+			seenAlbum = true
+		}
+	}
+	return opts, nil
+}
+
+func collectImageFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff":
+			files = append(files, path)
+		}
 		return nil
-	}
-	albumName := "SG Ingest"
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		albumName = strings.TrimSpace(args[0])
-	}
-	sessionDir := filepath.Join(root, "session", selected)
-	windows, err := loadStepWindows(sessionDir, protocol)
+	})
 	if err != nil {
-		return err
+		return nil, err
 	}
+	sort.Strings(files)
+	return files, nil
+}
 
-	tmpDir, err := os.MkdirTemp("", "sg-photos-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	exported, err := exportPhotosFromApplePhotos(albumName, tmpDir)
-	if err != nil {
-		return err
-	}
-	if len(exported) == 0 {
-		fmt.Println("no photos exported from album", albumName)
-		return nil
-	}
-
+func ingestPhotosForSession(sessionDir string, windows []stepWindow, sources []string, captureTimeFn func(string) (time.Time, error), warnf func(string, ...any)) (ingestStats, error) {
+	stats := ingestStats{}
 	existingHashes, err := collectSessionAssetHashes(sessionDir)
 	if err != nil {
-		return err
+		return stats, err
 	}
 
-	copied := 0
-	skippedDup := 0
-	skippedNoEXIF := 0
-	skippedWindow := 0
-	for _, src := range exported {
-		captureTime, exifErr := exifCaptureTime(src)
+	for _, src := range sources {
+		captureTime, exifErr := captureTimeFn(src)
 		if exifErr != nil {
-			skippedNoEXIF++
-			fmt.Printf("warning: skipped (missing EXIF capture time): %s\n", src)
+			stats.SkippedNoEXIF++
+			if warnf != nil {
+				warnf("warning: skipped (missing EXIF capture time): %s\n", src)
+			}
 			continue
 		}
 		idx := findStepWindowIndex(captureTime, windows)
 		if idx < 0 {
-			skippedWindow++
+			stats.SkippedWindow++
 			continue
 		}
 		hash8, err := fileSHA8(src)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		if existingHashes[hash8] {
-			skippedDup++
+			stats.SkippedDup++
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(src))
@@ -946,22 +1457,20 @@ func cmdIngestPhotos(args []string) error {
 		destName := fmt.Sprintf("%s_%s%s", captureTime.Local().Format("20060102-150405"), hash8, ext)
 		destDir := filepath.Join(sessionDir, "step", windows[idx].StepSlug, "asset")
 		if err := util.EnsureDir(destDir); err != nil {
-			return err
+			return stats, err
 		}
 		dest := filepath.Join(destDir, destName)
 		if _, err := os.Stat(dest); err == nil {
-			skippedDup++
+			stats.SkippedDup++
 			continue
 		}
 		if err := copyFile(src, dest); err != nil {
-			return err
+			return stats, err
 		}
 		existingHashes[hash8] = true
-		copied++
+		stats.Copied++
 	}
-
-	fmt.Printf("ingest complete: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", copied, skippedDup, skippedNoEXIF, skippedWindow)
-	return nil
+	return stats, nil
 }
 
 type stepWindow struct {
@@ -970,6 +1479,21 @@ type stepWindow struct {
 	End      time.Time
 	Last     bool
 }
+
+type ingestPhotosOptions struct {
+	AlbumName string
+	AssetsDir string
+}
+
+type ingestStats struct {
+	Copied        int
+	SkippedDup    int
+	SkippedNoEXIF int
+	SkippedWindow int
+}
+
+var exportPhotosFromApplePhotosFn = exportPhotosFromApplePhotos
+var exifCaptureTimeFn = exifCaptureTime
 
 func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, error) {
 	starts := make([]time.Time, len(protocol.Steps))

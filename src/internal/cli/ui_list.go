@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,13 +25,25 @@ func (m listModel) Init() tea.Cmd { return nil }
 func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Start filtering immediately when typing, without requiring "/".
+		if !m.list.SettingFilter() && msg.Type == tea.KeyRunes && hasNonSpaceRune(msg.Runes) {
+			m.list.SetShowFilter(true)
+			m.list.SetFilteringEnabled(true)
+			m.list.SetFilterState(list.Filtering)
+		}
 		switch msg.String() {
 		case "enter":
+			if m.list.SettingFilter() {
+				break
+			}
 			if it, ok := m.list.SelectedItem().(listItem); ok {
 				m.selected = string(it)
 			}
 			return m, tea.Quit
 		case "esc", "ctrl+c":
+			if m.list.SettingFilter() && msg.String() == "esc" {
+				break
+			}
 			m.canceled = true
 			return m, tea.Quit
 		}
@@ -63,4 +76,13 @@ func runSelect(title string, items []string) (string, bool, error) {
 		return "", false, fmt.Errorf("no selection")
 	}
 	return out.selected, false, nil
+}
+
+func hasNonSpaceRune(rs []rune) bool {
+	for _, r := range rs {
+		if !unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }

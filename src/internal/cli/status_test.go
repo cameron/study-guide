@@ -29,10 +29,7 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	}, ""); err != nil {
 		t.Fatalf("write session failed: %v", err)
 	}
-	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step", "step.sg.md"), map[string]any{
-		"step_name": "First Step",
-		"step_slug": "first-step",
-	}, ""); err != nil {
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step", "step.sg.md"), map[string]any{}, ""); err != nil {
 		t.Fatalf("write step failed: %v", err)
 	}
 

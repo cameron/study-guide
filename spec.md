@@ -16,7 +16,9 @@ In scope:
 - filesystem-based persistence
 - interactive CLI workflows
 - one protocol per study
+- multi-session progression from a single terminal (parallel participant sessions)
 - direct Apple Photos ingestion on macOS
+- local filesystem asset ingestion mode for development/testing
 - best-effort publish (HTML + PDF)
 
 Implementation references (preferred libraries):
@@ -24,8 +26,12 @@ Implementation references (preferred libraries):
 - TUI components: https://github.com/charmbracelet/bubbles
 - terminal markdown rendering: https://github.com/charmbracelet/glow
 
+## Architecture and Implementation Notes
+- Interactive command workflows should run in a single long-lived Bubble Tea program per command invocation.
+- Within an interactive command, transitions between screens/actions should be internal model state changes, not nested `tea.NewProgram` launches.
+
 Out of scope for v1:
-- non-interactive command mode (design should allow adding this later)
+- full non-interactive coverage for all commands except where explicitly defined
 - multi-protocol studies
 - cloud sync
 
@@ -142,8 +148,6 @@ Optional markdown sections:
 
 ## `<study-root>/session/<slug>/step/<step-slug>/step.sg.md`
 Required frontmatter:
-- `step_name`
-- `step_slug`
 - `time_started`
 
 Required at session completion:
@@ -155,7 +159,8 @@ Optional markdown body:
 ## CLI Contracts
 
 `sg` is the executable.
-All v1 commands are interactive-first (non-interactive deferred).
+`sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
+`sg current-session advance`, `sg ingest-photos`, `sg status`, and `sg publish` are non-interactive.
 
 ### `sg init`
 Interactive prompt:
@@ -211,12 +216,68 @@ Interactive session flow:
 6. On finish: write current step `time_finished` and `session.sg.md time_finished`.
 
 Rule: session command is authoritative for step timing. Step timestamps are never derived from photos.
+Note: for session progression, a step may be treated as effectively finished when a later protocol step has `time_started`, even if the earlier step has no explicit `time_finished`.
+
+### `sg sessions`
+Interactive session switchboard for running multiple sessions in parallel from one terminal.
+
+Behavior:
+1. Shows only incomplete sessions.
+2. Provides an autocomplete query over subject name and session slug.
+3. In the same list view, press `Enter` once to arm the highlighted session/action.
+4. Press `Enter` again (on the same row) to execute the default action:
+- start first protocol step (if no step has started yet)
+- advance to next step (if currently between first and last step)
+- finish session (if currently on final step)
+5. Press `Esc` to cancel an armed action (no dedicated `Back` item/screen).
+6. Includes an action to create a new session without leaving the switchboard.
+7. The session list view uses compact single-line rows (no blank description line).
+   Unarmed row format includes step progress: `<slug> | <subject> | <X>/<Y> <current step>`.
+   The browse view is implemented with a table component (column headers visible).
+   Step progress is rendered as `[X/Y]`.
+   `X` is the count of protocol steps progressed so far (implicitly-finished earlier steps count, plus the currently active step when present).
+8. The list control/help legend is hidden on this screen.
+9. Replace generic item-count status text with `current step: <step-name|->` status text.
+10. When an action is armed, update that same session row inline (not below the list), for example:
+- `<slug> | <subject> | <X>/<Y> <current step> "enter to advance to <next step>?"`
+11. Show `esc to cancel` as subtle/grey helper text.
+12. The browse view includes a `Next Step` column:
+- unarmed rows: next step name rendered in subtle/grey style
+- armed row: same next-step name rendered with high-contrast emphasis and suffix ` (enter to advance)`
+   Browse table base column widths are absolute: `SLUG=35`, `SUBJECT=35`, `STEP=48`; `NEXT STEP` gets the remaining width with minimum `32`.
+13. Filter prompt text is ` filter: ` (one leading space; no separate `Sessions` heading line).
+14. Browse table does not include `Create new session` or `Exit` rows.
+15. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
+16. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
+17. In create mode, selecting `Done` returns to the browse sessions table (showing the created session when applicable).
+18. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
+
+Rule: this command enables switching among concurrent sessions without changing directories.
+Rule: any number of sessions may be in-progress concurrently.
+
+### `sg current-session advance`
+Non-interactive "advance once" command for scriptable/session-directory usage.
+
+Behavior:
+- when run inside `<study-root>/session/<slug>/`, target that session
+- otherwise require explicit `--session <slug>`
+- performs one transition only:
+  - start first step, or
+  - advance to next step, or
+  - finish the session if final step is active
+- prints resulting state (`started`, `advanced`, or `finished`) with session slug and active step slug
 
 ### `sg ingest-photos`
-Purpose: copy Apple Photos assets into matching step `asset/` folders by capture time.
+Purpose: copy photo assets into matching step `asset/` folders by capture time.
 
 Input source:
-- direct Apple Photos access on macOS (no filesystem import mode in v1)
+- default: direct Apple Photos album export on macOS
+- optional: `--assets-dir <path>` recursively reads image files from a local directory (used for tests/dev; also valid on non-macOS)
+
+Session targeting:
+- non-interactive
+- always processes all sessions under `<study-root>/session/`
+- if any session is missing required timing fields, command fails with a clear session-scoped error
 
 Timestamp source precedence:
 1. EXIF capture time
@@ -231,6 +292,7 @@ Rules:
 - deterministic output filename: `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`
 - duplicate handling: skip if same content already exists in target session
 - idempotent: re-running ingestion should not duplicate copied assets
+- prints per-session counts and one aggregate summary line
 
 ### `sg status`
 Reports missing/invalid data that affects publication:
@@ -313,7 +375,7 @@ All criteria below are pass/fail requirements for v1.
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
 2. Session slug follows `<DD-MM-YYYY>-<subject-surname[-surname...]>`.
 3. Session file contains required fields: `time_started`, `subject_ids`.
-4. Starting each step creates `step/<step-slug>/step.sg.md` with `step_name`, `step_slug`, and `time_started`.
+4. Starting each step creates `step/<step-slug>/step.sg.md` with `time_started`.
 5. Advancing from one step to the next writes `time_finished` to the previous step.
 6. Finishing a session writes:
 - `time_finished` on the active/final step
@@ -321,18 +383,33 @@ All criteria below are pass/fail requirements for v1.
 7. Step times are written by `sg session` and never inferred from ingested media.
 8. All timestamps in session and step files use `HH:MM:SS DD-MM-YYYY`.
 9. `session.sg.md` frontmatter key order writes `time_started` before `time_finished` when both exist.
+10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
+11. In `sg sessions`, a second `Enter` after selection executes exactly one transition (`start`, `advance`, or `finish`) based on current session progress.
+12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
+13. `sg current-session advance` works from within a session directory without requiring `cd` to other sessions.
+14. `sg current-session advance --session <slug>` advances a specific session from study root (or any path within the study).
+15. `sg sessions` uses one list view for arm-and-confirm (no separate confirm screen and no `Back` option); `Esc` cancels armed actions.
+16. `sg sessions` view hides list control/help context and shows `current step: ...` status text instead of generic item-count status text.
+17. In `sg sessions`, arming an action updates that same session row inline with `<X>/<Y>` progress and `enter to ...?` copy (no floating confirmation block below the list).
+18. `sg sessions` shows `esc to cancel` helper text in subtle/grey style while an action is armed.
+19. `sg sessions` progress numerator `X` in `[X/Y]` reflects progressed steps, not only active-step index; when no step is currently active but later protocol steps remain, `X` equals the number of completed steps.
 
 ### E. Photo Ingestion
-1. `sg ingest-photos` reads assets directly from Apple Photos on macOS.
-2. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
-3. Time-window matching rule is enforced:
+1. `sg ingest-photos` is non-interactive and runs against all sessions in the study.
+2. Input source modes:
+- default mode reads assets from Apple Photos on macOS.
+- `--assets-dir <path>` mode reads image files recursively from local filesystem (supported on all OSes).
+3. `--assets-dir` is optional.
+4. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
+5. Time-window matching rule is enforced:
 - non-last step: `[step.time_started, next_step.time_started)`
 - last step: `[last_step.time_started, last_step.time_finished]`
-4. Assets are copied to the correct `step/<step-slug>/asset/` directory.
-5. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
-6. Duplicate files are skipped based on content identity.
-7. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
-8. Ingestion refuses to run when required timing fields for matching are missing.
+6. Assets are copied to the correct `step/<step-slug>/asset/` directory.
+7. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
+8. Duplicate files are skipped based on content identity within each session.
+9. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
+10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
+11. Output includes per-session ingest counts and aggregate totals.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
@@ -372,5 +449,8 @@ All criteria below are pass/fail requirements for v1.
 - protocol step parsing and title extraction
 - subject store create/edit/remove and subject resolution behavior
 - status issue detection for missing required fields/sections
+- ingest photo window matching and boundary behavior
+- ingest duplicate/idempotency behavior
+- ingest command behavior using `--assets-dir` fixtures against `study-eg`
 3. `go test ./...` passes in a clean checkout.
 4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.

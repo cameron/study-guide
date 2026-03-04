@@ -79,9 +79,7 @@ func orderedKeys(m map[string]any) []string {
 		"time_started":   70,
 		"time_finished":  80,
 		"subject_ids":    90,
-		"step_name":      100,
-		"step_slug":      110,
-		"pi_subject_ids": 120,
+		"pi_subject_ids": 100,
 	}
 	keys := make([]string, 0, len(m))
 	for k := range m {
