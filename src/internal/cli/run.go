@@ -1,0 +1,1211 @@
+package cli
+
+import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/go-pdf/fpdf"
+	"github.com/rwcarlsen/goexif/exif"
+
+	"study-guide/src/internal/store"
+	"study-guide/src/internal/util"
+)
+
+func Run(args []string) int {
+	if len(args) == 0 {
+		printHelp()
+		return 0
+	}
+	var err error
+	switch args[0] {
+	case "init":
+		err = cmdInit()
+	case "subject":
+		err = cmdSubject(args[1:])
+	case "session":
+		err = cmdSession()
+	case "status":
+		err = cmdStatus(true)
+	case "publish":
+		err = cmdPublish()
+	case "ingest-photos":
+		err = cmdIngestPhotos(args[1:])
+	case "help", "-h", "--help":
+		printHelp()
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+		printHelp()
+		return 2
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
+}
+
+func printHelp() {
+	fmt.Println(`sg - Study Guide CLI
+
+Commands:
+  init
+  subject create|edit|search|print|ls|rm
+  session
+  status
+  publish
+  ingest-photos`)
+}
+
+func cmdInit() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	vals, canceled, err := runForm("Initialize Study", []formField{
+		{Name: "study_name", Label: "Study Name", Required: true},
+		{Name: "protocol_outline", Label: "Protocol Steps (comma-separated)", Required: false},
+	})
+	if err != nil {
+		return err
+	}
+	if canceled {
+		fmt.Println("canceled")
+		return nil
+	}
+	studyName := strings.TrimSpace(vals["study_name"])
+	if studyName == "" {
+		return errors.New("study name is required")
+	}
+	outlineSteps := parseOutlineSteps(vals["protocol_outline"])
+	if len(outlineSteps) == 0 {
+		outlineSteps = []string{"First Step"}
+	}
+	if err := ensureStudyFile(filepath.Join(cwd, "study.sg.md"), studyName); err != nil {
+		return err
+	}
+	if err := ensureProtocolFile(filepath.Join(cwd, "protocol.sg.md"), outlineSteps); err != nil {
+		return err
+	}
+	if err := ensureFile(filepath.Join(cwd, "subject-requirements.yaml"), "type: person\n"); err != nil {
+		return err
+	}
+	if err := util.EnsureDir(filepath.Join(cwd, "session")); err != nil {
+		return err
+	}
+	fmt.Println("initialized study scaffold")
+	return nil
+}
+
+func parseOutlineSteps(raw string) []string {
+	parts := strings.Split(raw, ",")
+	steps := make([]string, 0, len(parts))
+	for _, p := range parts {
+		step := strings.TrimSpace(p)
+		if step != "" {
+			steps = append(steps, step)
+		}
+	}
+	return steps
+}
+
+func ensureFile(path, content string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func ensureStudyFile(path, studyName string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	fm := map[string]any{
+		"status":     "WIP",
+		"created_on": util.NowTimestamp(),
+	}
+	body := fmt.Sprintf("# %s\n\n# Hypotheses\n\n# Discussion\n\n# Conclusion\n\n# Special Thanks\n", studyName)
+	return util.WriteFrontmatterFile(path, fm, body)
+}
+
+func ensureProtocolFile(path string, steps []string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("# Protocol Summary\n\nDescribe the protocol.\n\n# Steps\n\n")
+	for _, s := range steps {
+		b.WriteString("## ")
+		b.WriteString(s)
+		b.WriteString("\n\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func cmdSubject(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: sg subject create|edit|search|print|ls|rm")
+	}
+	switch args[0] {
+	case "create":
+		return subjectCreate()
+	case "edit":
+		if len(args) < 2 {
+			return errors.New("usage: sg subject edit <id-or-name>")
+		}
+		return subjectEdit(strings.Join(args[1:], " "))
+	case "ls":
+		return subjectList()
+	case "search":
+		if len(args) < 2 {
+			return errors.New("usage: sg subject search <name>")
+		}
+		return subjectSearch(strings.Join(args[1:], " "))
+	case "print":
+		if len(args) < 2 {
+			return errors.New("usage: sg subject print <id-or-name>")
+		}
+		return subjectPrint(strings.Join(args[1:], " "))
+	case "rm":
+		if len(args) < 2 {
+			return errors.New("usage: sg subject rm <id>")
+		}
+		return store.RemoveSubject(args[1])
+	default:
+		return fmt.Errorf("unknown subject subcommand: %s", args[0])
+	}
+}
+
+func subjectCreate() error {
+	requiredMap := map[string]bool{"name": true}
+	if root, err := util.StudyRootFromCwd(); err == nil {
+		fields, err := store.ReadRequiredSubjectFields(root)
+		if err == nil {
+			for _, f := range fields {
+				requiredMap[f] = true
+			}
+		}
+	}
+	fields := []formField{
+		{Name: "name", Label: "Name", Required: requiredMap["name"]},
+		{Name: "email", Label: "Email", Required: requiredMap["email"]},
+		{Name: "phone", Label: "Phone", Required: requiredMap["phone"]},
+		{Name: "age", Label: "Age", Required: requiredMap["age"]},
+		{Name: "sex", Label: "Sex", Required: requiredMap["sex"]},
+		{Name: "notes", Label: "Notes", Required: false},
+	}
+	vals, canceled, err := runForm("Create Subject", fields)
+	if err != nil {
+		return err
+	}
+	if canceled {
+		fmt.Println("canceled")
+		return nil
+	}
+	s := store.Subject{
+		Name:  vals["name"],
+		Type:  "person",
+		Email: vals["email"],
+		Phone: vals["phone"],
+		Age:   vals["age"],
+		Sex:   vals["sex"],
+		Notes: vals["notes"],
+	}
+	path, err := store.SaveSubject(s)
+	if err != nil {
+		return err
+	}
+	fmt.Println("created", path)
+	return nil
+}
+
+func subjectList() error {
+	subs, err := store.ListSubjects()
+	if err != nil {
+		return err
+	}
+	if len(subs) == 0 {
+		fmt.Println("no subjects")
+		return nil
+	}
+	for _, s := range subs {
+		fmt.Printf("- %s (%s)\n", s.Name, s.UUID)
+	}
+	return nil
+}
+
+func subjectSearch(q string) error {
+	matches, err := store.FindSubject(q)
+	if err != nil {
+		return err
+	}
+	for _, s := range matches {
+		fmt.Printf("- %s (%s)\n", s.Name, s.UUID)
+	}
+	if len(matches) == 0 {
+		fmt.Println("no matches")
+	}
+	return nil
+}
+
+func subjectPrint(q string) error {
+	matches, err := store.FindSubject(q)
+	if err != nil {
+		return err
+	}
+	if len(matches) == 0 {
+		return errors.New("not found")
+	}
+	if len(matches) > 1 {
+		return errors.New("ambiguous")
+	}
+	s := matches[0]
+	md := fmt.Sprintf("# Subject\n\n- Name: %s\n- UUID: %s\n- Email: %s\n- Phone: %s\n- Age: %s\n- Sex: %s\n", s.Name, s.UUID, s.Email, s.Phone, s.Age, s.Sex)
+	util.PrintMarkdown(md)
+	return nil
+}
+
+func subjectEdit(q string) error {
+	s, err := store.ResolveSubject(q)
+	if err != nil {
+		return err
+	}
+	fields := []formField{
+		{Name: "name", Label: "Name", Required: true, Value: s.Name},
+		{Name: "email", Label: "Email", Value: s.Email},
+		{Name: "phone", Label: "Phone", Value: s.Phone},
+		{Name: "age", Label: "Age", Value: s.Age},
+		{Name: "sex", Label: "Sex", Value: s.Sex},
+		{Name: "notes", Label: "Notes", Value: s.Notes},
+	}
+	vals, canceled, err := runForm("Edit Subject", fields)
+	if err != nil {
+		return err
+	}
+	if canceled {
+		fmt.Println("canceled")
+		return nil
+	}
+	s.Name = vals["name"]
+	s.Email = vals["email"]
+	s.Phone = vals["phone"]
+	s.Age = vals["age"]
+	s.Sex = vals["sex"]
+	s.Notes = vals["notes"]
+	path, err := store.SaveSubject(s)
+	if err != nil {
+		return err
+	}
+	fmt.Println("updated", path)
+	return nil
+}
+
+func cmdSession() error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	selected, err := selectSubjectsForSession()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("no protocol steps found")
+	}
+
+	today := time.Now().Format("02-01-2006")
+	surnames := make([]string, 0, len(selected))
+	subjectIDs := make([]string, 0, len(selected))
+	for _, s := range selected {
+		surnames = append(surnames, util.Slugify(lastToken(s.Name)))
+		subjectIDs = append(subjectIDs, s.UUID)
+	}
+	sessionSlug := fmt.Sprintf("%s-%s", today, strings.Join(surnames, "-"))
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	if err := util.EnsureDir(filepath.Join(sessionDir, "step")); err != nil {
+		return err
+	}
+	sessionPath := filepath.Join(sessionDir, "session.sg.md")
+	subjectLines := make([]string, 0, len(selected))
+	for _, s := range selected {
+		subjectLines = append(subjectLines, fmt.Sprintf("- %s (%s)", s.Name, s.UUID))
+	}
+	sfm := map[string]any{
+		"time_started": util.NowTimestamp(),
+		"subject_ids":  subjectIDs,
+	}
+	if err := util.WriteFrontmatterFile(sessionPath, sfm, "# Subjects\n\n"+strings.Join(subjectLines, "\n")+"\n\n# Notes\n"); err != nil {
+		return err
+	}
+
+	var prevStepPath string
+	for i, step := range protocol.Steps {
+		if prevStepPath != "" {
+			if _, canceled, err := runSelect("Advance to next step", []string{"Continue", "Cancel"}); err != nil {
+				return err
+			} else if canceled {
+				return nil
+			}
+			if err := setFrontmatterField(prevStepPath, "time_finished", util.NowTimestamp()); err != nil {
+				return err
+			}
+		}
+		stepDir := filepath.Join(sessionDir, "step", step.Slug)
+		if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
+			return err
+		}
+		stepPath := filepath.Join(stepDir, "step.sg.md")
+		fm := map[string]any{
+			"step_name":    step.Name,
+			"step_slug":    step.Slug,
+			"time_started": util.NowTimestamp(),
+		}
+		if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
+			return err
+		}
+		prevStepPath = stepPath
+		fmt.Printf("started step %d/%d: %s\n", i+1, len(protocol.Steps), step.Name)
+	}
+	if prevStepPath != "" {
+		if _, canceled, err := runSelect("Finish session?", []string{"Finish", "Cancel"}); err != nil {
+			return err
+		} else if canceled {
+			return nil
+		}
+		if err := setFrontmatterField(prevStepPath, "time_finished", util.NowTimestamp()); err != nil {
+			return err
+		}
+	}
+	if err := setFrontmatterField(sessionPath, "time_finished", util.NowTimestamp()); err != nil {
+		return err
+	}
+	fmt.Println("session complete:", sessionDir)
+	return nil
+}
+
+func selectSubjectsForSession() ([]store.Subject, error) {
+	selected := []store.Subject{}
+	selectedByUUID := map[string]bool{}
+
+	for {
+		subs, err := store.ListSubjects()
+		if err != nil {
+			return nil, err
+		}
+		items := make([]string, 0, len(subs)+2)
+		lookup := map[string]store.Subject{}
+		for _, s := range subs {
+			label := fmt.Sprintf("%s (%s)", s.Name, strings.Split(s.UUID, "-")[0])
+			if selectedByUUID[s.UUID] {
+				label = "[selected] " + label
+			}
+			items = append(items, label)
+			lookup[label] = s
+		}
+		items = append(items, "Create new subject")
+		items = append(items, "Done selecting")
+		choice, canceled, err := runSelect("Select subject(s)", items)
+		if err != nil {
+			return nil, err
+		}
+		if canceled {
+			return nil, errors.New("session canceled")
+		}
+		switch choice {
+		case "Create new subject":
+			if err := subjectCreate(); err != nil {
+				return nil, err
+			}
+			continue
+		case "Done selecting":
+			if len(selected) == 0 {
+				fmt.Println("select at least one subject")
+				continue
+			}
+			return selected, nil
+		default:
+			s := lookup[choice]
+			if !selectedByUUID[s.UUID] {
+				selectedByUUID[s.UUID] = true
+				selected = append(selected, s)
+			}
+		}
+	}
+}
+
+func cmdStatus(render bool) error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	issues, err := collectStatusIssues(root)
+	if err != nil {
+		return err
+	}
+	if len(issues) == 0 {
+		fmt.Println("status: complete")
+		return nil
+	}
+	md := "# Status\n\n## Issues\n"
+	for _, i := range issues {
+		md += "- " + i + "\n"
+	}
+	md += "\nOverall completeness: false\n"
+	if render {
+		util.PrintMarkdown(md)
+	} else {
+		fmt.Print(md)
+	}
+	return nil
+}
+
+func collectStatusIssues(root string) ([]string, error) {
+	var issues []string
+	studyPath := filepath.Join(root, "study.sg.md")
+	fm, body, err := util.ReadFrontmatterFile(studyPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"status", "created_on"} {
+		if strings.TrimSpace(asString(fm[key])) == "" {
+			issues = append(issues, "study.sg.md missing required field: "+key)
+		}
+	}
+	if strings.TrimSpace(store.ExtractStudyTitle(body)) == "" {
+		issues = append(issues, "study.sg.md missing title H1")
+	}
+	for _, sec := range []string{"# Hypotheses", "# Discussion", "# Conclusion"} {
+		if !strings.Contains(body, sec) {
+			issues = append(issues, "study.sg.md missing section: "+sec)
+		}
+	}
+
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		issues = append(issues, "protocol invalid: "+err.Error())
+	}
+
+	sessionRoot := filepath.Join(root, "session")
+	entries, err := os.ReadDir(sessionRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slug := e.Name()
+		sdir := filepath.Join(sessionRoot, slug)
+		spath := filepath.Join(sdir, "session.sg.md")
+		sfm, _, err := util.ReadFrontmatterFile(spath)
+		if err != nil {
+			issues = append(issues, "invalid session file: "+spath)
+			continue
+		}
+		if strings.TrimSpace(asString(sfm["time_started"])) == "" {
+			issues = append(issues, "session missing required field time_started: "+slug)
+		}
+		if !hasNonEmptySubjectIDs(sfm["subject_ids"]) {
+			issues = append(issues, "session missing required field subject_ids: "+slug)
+		}
+
+		if err == nil {
+			for _, step := range protocol.Steps {
+				stepPath := filepath.Join(sdir, "step", step.Slug, "step.sg.md")
+				stepFM, _, readErr := util.ReadFrontmatterFile(stepPath)
+				if readErr != nil {
+					issues = append(issues, "session missing step file for protocol step "+step.Slug+": "+slug)
+					continue
+				}
+				if strings.TrimSpace(asString(stepFM["step_name"])) == "" {
+					issues = append(issues, "step missing required field step_name: "+stepPath)
+				}
+				if strings.TrimSpace(asString(stepFM["step_slug"])) == "" {
+					issues = append(issues, "step missing required field step_slug: "+stepPath)
+				}
+				if strings.TrimSpace(asString(stepFM["time_started"])) == "" {
+					issues = append(issues, "step missing time_started: "+stepPath)
+				}
+				if strings.TrimSpace(asString(stepFM["time_finished"])) == "" {
+					issues = append(issues, "step missing time_finished: "+stepPath)
+				}
+			}
+		}
+	}
+	sort.Strings(issues)
+	return issues, nil
+}
+
+func hasNonEmptySubjectIDs(v any) bool {
+	switch ids := v.(type) {
+	case []any:
+		return len(ids) > 0
+	case []string:
+		return len(ids) > 0
+	default:
+		return false
+	}
+}
+
+func cmdPublish() error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	issues, err := collectStatusIssues(root)
+	if err != nil {
+		return err
+	}
+	incomplete := len(issues) > 0
+	studyPath := filepath.Join(root, "study.sg.md")
+	if incomplete {
+		if err := setFrontmatterField(studyPath, "status", "WIP"); err != nil {
+			return err
+		}
+	}
+
+	studyFM, studyBody, err := util.ReadFrontmatterFile(studyPath)
+	if err != nil {
+		return err
+	}
+	protocol, _ := store.ParseProtocol(root)
+	title := store.ExtractStudyTitle(studyBody)
+	if title == "" {
+		title = "Untitled Study"
+	}
+
+	subjects, err := store.ListSubjects()
+	if err != nil {
+		return err
+	}
+	subjectByID := map[string]store.Subject{}
+	for _, s := range subjects {
+		subjectByID[s.UUID] = s
+	}
+
+	sessions, err := loadSessionsForPublish(root, protocol, subjectByID)
+	if err != nil {
+		return err
+	}
+
+	outDir := filepath.Join(root, "publish")
+	siteDir := filepath.Join(outDir, "site")
+	if err := util.EnsureDir(siteDir); err != nil {
+		return err
+	}
+	if err := util.EnsureDir(filepath.Join(siteDir, "assets")); err != nil {
+		return err
+	}
+
+	html := renderPublishHTML(root, title, studyFM, studyBody, protocol, sessions, incomplete)
+	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte(html), 0o644); err != nil {
+		return err
+	}
+
+	pdfBody := renderPublishText(title, studyFM, studyBody, protocol, sessions)
+	if err := writePDF(filepath.Join(outDir, "study.pdf"), title, pdfBody, incomplete); err != nil {
+		return err
+	}
+	fmt.Printf("published to %s\n", outDir)
+	return nil
+}
+
+type publishStep struct {
+	Name      string
+	Slug      string
+	Started   string
+	Finished  string
+	ImageRefs []string
+}
+
+type publishSession struct {
+	Slug       string
+	Started    string
+	Finished   string
+	SubjectIDs []string
+	Subjects   []string
+	Steps      []publishStep
+}
+
+func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID map[string]store.Subject) ([]publishSession, error) {
+	sessionRoot := filepath.Join(root, "session")
+	entries, err := os.ReadDir(sessionRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	sessions := make([]publishSession, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slug := e.Name()
+		sdir := filepath.Join(sessionRoot, slug)
+		sfm, _, err := util.ReadFrontmatterFile(filepath.Join(sdir, "session.sg.md"))
+		if err != nil {
+			continue
+		}
+		ids := parseSubjectIDs(sfm["subject_ids"])
+		names := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if s, ok := subjectByID[id]; ok {
+				names = append(names, s.Name)
+			} else {
+				names = append(names, id)
+			}
+		}
+		steps := make([]publishStep, 0, len(protocol.Steps))
+		for _, st := range protocol.Steps {
+			stepPath := filepath.Join(sdir, "step", st.Slug, "step.sg.md")
+			stepFM, _, err := util.ReadFrontmatterFile(stepPath)
+			if err != nil {
+				continue
+			}
+			imgRefs := []string{}
+			assetDir := filepath.Join(sdir, "step", st.Slug, "asset")
+			_ = filepath.WalkDir(assetDir, func(path string, d fs.DirEntry, walkErr error) error {
+				if walkErr != nil || d.IsDir() {
+					return nil
+				}
+				imgRefs = append(imgRefs, path)
+				return nil
+			})
+			sort.Strings(imgRefs)
+			steps = append(steps, publishStep{
+				Name:      asString(stepFM["step_name"]),
+				Slug:      asString(stepFM["step_slug"]),
+				Started:   asString(stepFM["time_started"]),
+				Finished:  asString(stepFM["time_finished"]),
+				ImageRefs: imgRefs,
+			})
+		}
+		sessions = append(sessions, publishSession{
+			Slug:       slug,
+			Started:    asString(sfm["time_started"]),
+			Finished:   asString(sfm["time_finished"]),
+			SubjectIDs: ids,
+			Subjects:   names,
+			Steps:      steps,
+		})
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		ti, ei := util.ParseTimestamp(sessions[i].Started)
+		tj, ej := util.ParseTimestamp(sessions[j].Started)
+		if ei == nil && ej == nil {
+			return ti.Before(tj)
+		}
+		return sessions[i].Slug < sessions[j].Slug
+	})
+	return sessions, nil
+}
+
+func parseSubjectIDs(v any) []string {
+	switch ids := v.(type) {
+	case []any:
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if s, ok := id.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if strings.TrimSpace(id) != "" {
+				out = append(out, id)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func renderPublishHTML(root, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
+	studyMeta := fmt.Sprintf("<p>Status: %s<br/>Created: %s</p>", escapeHTML(asString(studyFM["status"])), escapeHTML(asString(studyFM["created_on"])))
+	wip := ""
+	if incomplete {
+		wip = `<div style="padding:8px;background:#ffe9e9;border:1px solid #d66"><strong>WIP</strong> Incomplete study data</div>`
+	}
+	protocolSteps := ""
+	for _, step := range protocol.Steps {
+		protocolSteps += "<li>" + escapeHTML(step.Name) + "</li>"
+	}
+	if protocolSteps == "" {
+		protocolSteps = "<li>No protocol steps found</li>"
+	}
+
+	assetOut := filepath.Join(root, "publish", "site", "assets")
+	sessionHTML := ""
+	for _, s := range sessions {
+		sessionHTML += "<section><h3>Session " + escapeHTML(s.Slug) + "</h3>"
+		sessionHTML += "<p>Started: " + escapeHTML(s.Started) + "<br/>Finished: " + escapeHTML(s.Finished) + "</p>"
+		sessionHTML += "<p>Subjects: " + escapeHTML(strings.Join(s.Subjects, ", ")) + "</p>"
+		sessionHTML += "<ul>"
+		for _, st := range s.Steps {
+			sessionHTML += "<li><strong>" + escapeHTML(st.Name) + "</strong> [" + escapeHTML(st.Started) + " - " + escapeHTML(st.Finished) + "]"
+			if len(st.ImageRefs) > 0 {
+				sessionHTML += "<div>"
+				for _, img := range st.ImageRefs {
+					relDest := filepath.Join("assets", s.Slug, st.Slug, filepath.Base(img))
+					dest := filepath.Join(assetOut, s.Slug, st.Slug, filepath.Base(img))
+					_ = util.EnsureDir(filepath.Dir(dest))
+					_ = copyFile(img, dest)
+					sessionHTML += `<img src="` + escapeHTML(relDest) + `" style="max-width:220px;max-height:220px;margin:4px"/>`
+				}
+				sessionHTML += "</div>"
+			}
+			sessionHTML += "</li>"
+		}
+		sessionHTML += "</ul></section>"
+	}
+	if sessionHTML == "" {
+		sessionHTML = "<p>No sessions.</p>"
+	}
+
+	return "<html><body>" + wip + "<h1>" + escapeHTML(title) + "</h1>" +
+		studyMeta +
+		"<h2>Hypotheses</h2><pre>" + escapeHTML(extractSection(studyBody, "Hypotheses")) + "</pre>" +
+		"<h2>Discussion</h2><pre>" + escapeHTML(extractSection(studyBody, "Discussion")) + "</pre>" +
+		"<h2>Conclusion</h2><pre>" + escapeHTML(extractSection(studyBody, "Conclusion")) + "</pre>" +
+		"<h2>Protocol Summary</h2><pre>" + escapeHTML(protocol.Summary) + "</pre>" +
+		"<h2>Protocol Steps</h2><ol>" + protocolSteps + "</ol>" +
+		"<h2>Sessions</h2>" + sessionHTML +
+		"</body></html>"
+}
+
+func renderPublishText(title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession) string {
+	var b strings.Builder
+	b.WriteString("Study: ")
+	b.WriteString(title)
+	b.WriteString("\nStatus: ")
+	b.WriteString(asString(studyFM["status"]))
+	b.WriteString("\nCreated: ")
+	b.WriteString(asString(studyFM["created_on"]))
+	b.WriteString("\n\nHypotheses\n")
+	b.WriteString(extractSection(studyBody, "Hypotheses"))
+	b.WriteString("\n\nDiscussion\n")
+	b.WriteString(extractSection(studyBody, "Discussion"))
+	b.WriteString("\n\nConclusion\n")
+	b.WriteString(extractSection(studyBody, "Conclusion"))
+	b.WriteString("\n\nProtocol Summary\n")
+	b.WriteString(protocol.Summary)
+	b.WriteString("\n\nProtocol Steps\n")
+	for _, step := range protocol.Steps {
+		b.WriteString("- ")
+		b.WriteString(step.Name)
+		b.WriteString("\n")
+	}
+	b.WriteString("\nSessions\n")
+	for _, s := range sessions {
+		b.WriteString("- ")
+		b.WriteString(s.Slug)
+		b.WriteString(" | subjects: ")
+		b.WriteString(strings.Join(s.Subjects, ", "))
+		b.WriteString("\n")
+		for _, st := range s.Steps {
+			b.WriteString("  * ")
+			b.WriteString(st.Name)
+			b.WriteString(" [")
+			b.WriteString(st.Started)
+			b.WriteString(" - ")
+			b.WriteString(st.Finished)
+			b.WriteString("] images: ")
+			b.WriteString(fmt.Sprintf("%d", len(st.ImageRefs)))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func extractSection(md, name string) string {
+	lines := strings.Split(md, "\n")
+	head := "# " + name
+	collecting := false
+	var out []string
+	for _, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "# ") {
+			if trimmed == head {
+				collecting = true
+				continue
+			}
+			if collecting {
+				break
+			}
+		}
+		if collecting {
+			out = append(out, raw)
+		}
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func cmdIngestPhotos(args []string) error {
+	if runtime.GOOS != "darwin" {
+		return errors.New("sg ingest-photos is supported only on macOS in v1")
+	}
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("protocol has no steps")
+	}
+
+	sessions, err := listSessionSlugs(root)
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		return errors.New("no sessions found")
+	}
+	selected, canceled, err := runSelect("Select session for ingest", sessions)
+	if err != nil {
+		return err
+	}
+	if canceled {
+		return nil
+	}
+	albumName := "SG Ingest"
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		albumName = strings.TrimSpace(args[0])
+	}
+	sessionDir := filepath.Join(root, "session", selected)
+	windows, err := loadStepWindows(sessionDir, protocol)
+	if err != nil {
+		return err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "sg-photos-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	exported, err := exportPhotosFromApplePhotos(albumName, tmpDir)
+	if err != nil {
+		return err
+	}
+	if len(exported) == 0 {
+		fmt.Println("no photos exported from album", albumName)
+		return nil
+	}
+
+	existingHashes, err := collectSessionAssetHashes(sessionDir)
+	if err != nil {
+		return err
+	}
+
+	copied := 0
+	skippedDup := 0
+	skippedNoEXIF := 0
+	skippedWindow := 0
+	for _, src := range exported {
+		captureTime, exifErr := exifCaptureTime(src)
+		if exifErr != nil {
+			skippedNoEXIF++
+			fmt.Printf("warning: skipped (missing EXIF capture time): %s\n", src)
+			continue
+		}
+		idx := findStepWindowIndex(captureTime, windows)
+		if idx < 0 {
+			skippedWindow++
+			continue
+		}
+		hash8, err := fileSHA8(src)
+		if err != nil {
+			return err
+		}
+		if existingHashes[hash8] {
+			skippedDup++
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(src))
+		if ext == "" {
+			ext = ".bin"
+		}
+		destName := fmt.Sprintf("%s_%s%s", captureTime.Local().Format("20060102-150405"), hash8, ext)
+		destDir := filepath.Join(sessionDir, "step", windows[idx].StepSlug, "asset")
+		if err := util.EnsureDir(destDir); err != nil {
+			return err
+		}
+		dest := filepath.Join(destDir, destName)
+		if _, err := os.Stat(dest); err == nil {
+			skippedDup++
+			continue
+		}
+		if err := copyFile(src, dest); err != nil {
+			return err
+		}
+		existingHashes[hash8] = true
+		copied++
+	}
+
+	fmt.Printf("ingest complete: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", copied, skippedDup, skippedNoEXIF, skippedWindow)
+	return nil
+}
+
+type stepWindow struct {
+	StepSlug string
+	Start    time.Time
+	End      time.Time
+	Last     bool
+}
+
+func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, error) {
+	starts := make([]time.Time, len(protocol.Steps))
+	finishes := make([]time.Time, len(protocol.Steps))
+	for i, st := range protocol.Steps {
+		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+		fm, _, err := util.ReadFrontmatterFile(stepPath)
+		if err != nil {
+			return nil, fmt.Errorf("missing step file: %s", stepPath)
+		}
+		started := asString(fm["time_started"])
+		if strings.TrimSpace(started) == "" {
+			return nil, fmt.Errorf("step missing time_started: %s", stepPath)
+		}
+		t, err := util.ParseTimestamp(started)
+		if err != nil {
+			return nil, fmt.Errorf("invalid step time_started: %s", stepPath)
+		}
+		starts[i] = t
+		if finished := asString(fm["time_finished"]); strings.TrimSpace(finished) != "" {
+			ft, err := util.ParseTimestamp(finished)
+			if err != nil {
+				return nil, fmt.Errorf("invalid step time_finished: %s", stepPath)
+			}
+			finishes[i] = ft
+		}
+	}
+	last := len(protocol.Steps) - 1
+	if finishes[last].IsZero() {
+		return nil, errors.New("last step is missing time_finished")
+	}
+
+	windows := make([]stepWindow, 0, len(protocol.Steps))
+	for i, st := range protocol.Steps {
+		w := stepWindow{StepSlug: st.Slug, Start: starts[i], Last: i == last}
+		if i == last {
+			w.End = finishes[i]
+		} else {
+			w.End = starts[i+1]
+		}
+		windows = append(windows, w)
+	}
+	return windows, nil
+}
+
+func findStepWindowIndex(captured time.Time, windows []stepWindow) int {
+	for i, w := range windows {
+		if w.Last {
+			if (captured.Equal(w.Start) || captured.After(w.Start)) && (captured.Equal(w.End) || captured.Before(w.End)) {
+				return i
+			}
+			continue
+		}
+		if (captured.Equal(w.Start) || captured.After(w.Start)) && captured.Before(w.End) {
+			return i
+		}
+	}
+	return -1
+}
+
+func listSessionSlugs(root string) ([]string, error) {
+	sessionRoot := filepath.Join(root, "session")
+	entries, err := os.ReadDir(sessionRoot)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func exportPhotosFromApplePhotos(albumName, outDir string) ([]string, error) {
+	script := fmt.Sprintf(`set exportFolder to POSIX file "%s"
+tell application "Photos"
+	if not (exists album "%s") then
+		error "album not found: %s"
+	end if
+	set mediaItems to media items of album "%s"
+	if (count of mediaItems) is 0 then
+		return
+	end if
+	export mediaItems to exportFolder with using originals
+end tell`, escapeAppleScriptString(outDir), escapeAppleScriptString(albumName), escapeAppleScriptString(albumName), escapeAppleScriptString(albumName))
+	cmd := exec.Command("osascript", "-e", script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("failed exporting from Apple Photos: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	var files []string
+	_ = filepath.WalkDir(outDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff":
+			files = append(files, path)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, nil
+}
+
+func escapeAppleScriptString(s string) string {
+	return strings.ReplaceAll(s, `"`, `\\"`)
+}
+
+func exifCaptureTime(path string) (time.Time, error) {
+	if _, err := exec.LookPath("exiftool"); err == nil {
+		cmd := exec.Command("exiftool", "-s3", "-DateTimeOriginal", "-d", "%Y-%m-%d %H:%M:%S", path)
+		out, err := cmd.Output()
+		if err == nil {
+			v := strings.TrimSpace(string(out))
+			if v != "" {
+				if t, parseErr := time.ParseInLocation("2006-01-02 15:04:05", v, time.Local); parseErr == nil {
+					return t, nil
+				}
+			}
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer f.Close()
+	x, err := exif.Decode(f)
+	if err != nil {
+		return time.Time{}, err
+	}
+	tm, err := x.DateTime()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return tm.In(time.Local), nil
+}
+
+func collectSessionAssetHashes(sessionDir string) (map[string]bool, error) {
+	hashes := map[string]bool{}
+	err := filepath.WalkDir(sessionDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !strings.Contains(path, string(filepath.Separator)+"asset"+string(filepath.Separator)) {
+			return nil
+		}
+		h, hashErr := fileSHA8(path)
+		if hashErr != nil {
+			return hashErr
+		}
+		hashes[h] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return hashes, nil
+}
+
+func fileSHA8(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	sum := fmt.Sprintf("%x", h.Sum(nil))
+	return sum[:8], nil
+}
+
+func setFrontmatterField(path, key, value string) error {
+	fm, body, err := util.ReadFrontmatterFile(path)
+	if err != nil {
+		return err
+	}
+	fm[key] = value
+	return util.WriteFrontmatterFile(path, fm, body)
+}
+
+func lastToken(s string) string {
+	parts := strings.Fields(strings.TrimSpace(s))
+	if len(parts) == 0 {
+		return "subject"
+	}
+	return parts[len(parts)-1]
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func escapeHTML(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
+	return r.Replace(s)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := util.EnsureDir(filepath.Dir(dst)); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+func writePDF(path, title, body string, incomplete bool) error {
+	p := fpdf.New("P", "mm", "A4", "")
+	p.AddPage()
+	p.SetFont("Arial", "B", 16)
+	p.CellFormat(0, 10, title, "", 1, "L", false, 0, "")
+	p.SetFont("Arial", "", 11)
+	if incomplete {
+		p.SetTextColor(170, 40, 40)
+		p.CellFormat(0, 8, "WIP", "", 1, "L", false, 0, "")
+		p.SetTextColor(0, 0, 0)
+	}
+	p.Ln(2)
+	p.MultiCell(0, 5, body, "", "L", false)
+	return p.OutputFileAndClose(path)
+}

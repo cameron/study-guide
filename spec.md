@@ -40,7 +40,7 @@ Out of scope for v1:
 <study-root>/
   study.sg.md
   protocol.sg.md
-  subject-requirements.sg.md
+  subject-requirements.yaml
   session/
     <session-slug>/
       session.sg.md
@@ -91,14 +91,15 @@ Optional markdown sections:
 
 ## `<study-root>/study.sg.md`
 Required frontmatter:
-- `name`
 - `status` (enum: `WIP`, `concluded`)
 - `created_on`
-- `updated_on`
 
 Optional frontmatter:
 - `result_status` (enum: `positive`, `negative`, `null`, `uncertain`)
 - `pi_subject_ids` (array of subject UUIDs)
+
+Required markdown title:
+- first H1 heading is the study name/title
 
 Expected markdown sections:
 - `# Hypotheses`
@@ -119,19 +120,17 @@ Required markdown sections:
 Optional markdown sections:
 - `# Actions`
 
-## `<study-root>/subject-requirements.sg.md`
-Required frontmatter:
+## `<study-root>/subject-requirements.yaml`
+Required keys:
 - `type: person`
 
-Optional frontmatter keys specify required fields for subject creation flow:
+Optional keys specify required fields for subject creation flow:
 - `required_fields` (array: any of `name`, `email`, `phone`, `age`, `sex`)
 
 ## `<study-root>/session/<slug>/session.sg.md`
 Required frontmatter:
-- `uuid`
 - `time_started`
-- `subject_ids` (array of subject UUIDs)
-- `protocol_ref: protocol.sg.md`
+- `subject_ids` (array of subject UUIDs, minimum length 1)
 
 Optional frontmatter:
 - `time_finished`
@@ -159,15 +158,30 @@ Optional markdown body:
 All v1 commands are interactive-first (non-interactive deferred).
 
 ### `sg init`
+Interactive prompt:
+- asks for study name
+- asks for protocol outline as brief step titles (zero or more)
+
 Creates:
 - `study.sg.md`
 - `protocol.sg.md`
-- `subject-requirements.sg.md`
+- `subject-requirements.yaml`
 - `session/`
+
+`study.sg.md` scaffold rules:
+- include `created_on` with current local timestamp
+- do not include `name` in frontmatter
+- do not include `updated_on` in frontmatter
+- write study title as first H1 heading
+
+`protocol.sg.md` scaffold rules:
+- create `# Steps` from protocol outline collected during init
+- each outline entry becomes one H2 step heading in the entered order
+- if no outline is provided, create one placeholder step `## First Step`
 
 ### `sg subject create`
 - creates a subject in `~/.study-guide/subject/`
-- enforces `subject-requirements.sg.md` required fields when run from a study directory
+- enforces `subject-requirements.yaml` required fields when run from a study directory
 - collects optional fields after required fields
 
 ### `sg subject search <name>`
@@ -181,6 +195,11 @@ List subjects by name.
 
 ### `sg subject rm <id>`
 Delete one subject file from global subject store.
+
+### `sg subject edit <id-or-name>`
+- resolves a single subject (errors if not found or ambiguous)
+- opens an interactive edit form prefilled with current values
+- persists updated frontmatter/body to the same subject file
 
 ### `sg session`
 Interactive session flow:
@@ -251,7 +270,7 @@ Generated outputs should include:
 May be implemented as a minimal Flask server:
 - mobile-friendly form
 - writes subject `.sg.md` files into `~/.study-guide/subject/`
-- can read required fields from a selected study's `subject-requirements.sg.md`
+- can read required fields from a selected study's `subject-requirements.yaml`
 
 This is optional and should not block CLI implementation.
 
@@ -263,20 +282,26 @@ All criteria below are pass/fail requirements for v1.
 1. Running `sg init` in an empty directory creates:
 - `study.sg.md`
 - `protocol.sg.md`
-- `subject-requirements.sg.md`
+- `subject-requirements.yaml`
 - `session/`
 2. Re-running `sg init` does not destroy existing data files.
 3. The generated scaffold matches the canonical layout defined in this spec.
+4. `sg init` is interactive and requires a study name.
+5. `study.sg.md` frontmatter includes `created_on` and does not include `name` or `updated_on`.
+6. The first H1 in `study.sg.md` equals the study name entered during `sg init`.
+7. `sg init` accepts a protocol outline and writes each outline item as an H2 step under `# Steps` in `protocol.sg.md`.
+8. If protocol outline is left blank, `protocol.sg.md` includes a placeholder `## First Step`.
 
 ### B. Subject Store and Subject Commands
 1. `sg subject create` writes a `.sg.md` file under `~/.study-guide/subject/`.
 2. Created subject file includes required fields: `uuid`, `type`, `name`.
 3. `uuid` is valid UUIDv4 format.
-4. When invoked from a study directory, required fields from `subject-requirements.sg.md` are enforced.
+4. When invoked from a study directory, required fields from `subject-requirements.yaml` are enforced.
 5. `sg subject search <name>` returns matching subjects by name.
 6. `sg subject print <id-or-name>` prints exactly one matching subject or a clear not-found/ambiguous error.
 7. `sg subject ls` lists subjects in a human-readable format.
 8. `sg subject rm <id>` deletes only the targeted subject file and leaves others unchanged.
+9. `sg subject edit <id-or-name>` updates a single subject interactively and preserves UUID/path.
 
 ### C. Protocol Parsing
 1. `protocol.sg.md` is accepted only when `# Protocol Summary` and `# Steps` exist.
@@ -287,7 +312,7 @@ All criteria below are pass/fail requirements for v1.
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
 2. Session slug follows `<DD-MM-YYYY>-<subject-surname[-surname...]>`.
-3. Session file contains required fields: `uuid`, `time_started`, `subject_ids`, `protocol_ref`.
+3. Session file contains required fields: `time_started`, `subject_ids`.
 4. Starting each step creates `step/<step-slug>/step.sg.md` with `step_name`, `step_slug`, and `time_started`.
 5. Advancing from one step to the next writes `time_finished` to the previous step.
 6. Finishing a session writes:
@@ -295,6 +320,7 @@ All criteria below are pass/fail requirements for v1.
 - `time_finished` in `session.sg.md`
 7. Step times are written by `sg session` and never inferred from ingested media.
 8. All timestamps in session and step files use `HH:MM:SS DD-MM-YYYY`.
+9. `session.sg.md` frontmatter key order writes `time_started` before `time_finished` when both exist.
 
 ### E. Photo Ingestion
 1. `sg ingest-photos` reads assets directly from Apple Photos on macOS.
@@ -338,3 +364,13 @@ All criteria below are pass/fail requirements for v1.
 2. No command deletes session assets unless explicitly requested by that command's contract.
 3. Frontmatter remains parseable YAML after every command.
 4. Existing user-authored markdown body content is preserved unless the command is explicitly responsible for that section.
+
+### I. Automated Testing
+1. The repository includes real Go unit tests (`*_test.go`) for core behavior.
+2. At minimum, tests cover:
+- frontmatter read/write and key ordering guarantees
+- protocol step parsing and title extraction
+- subject store create/edit/remove and subject resolution behavior
+- status issue detection for missing required fields/sections
+3. `go test ./...` passes in a clean checkout.
+4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.
