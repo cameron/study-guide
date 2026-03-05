@@ -245,9 +245,47 @@ func TestRenderEntryRow_ProgressUsesCompletedStepsWhenNoActiveStep(t *testing.T)
 	}
 
 	model := sessionsSwitchboardModel{protocol: protocol}
-	_, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
+	_, _, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
 	if !strings.HasPrefix(stepText, "[2/3]") {
 		t.Fatalf("expected [2/3] step progress, got %q", stepText)
+	}
+}
+
+func TestLoadSessionRecords_ShowsLastProgressedStepWhenNoActiveStep(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocolThreeSteps()
+	slug := "18-02-2026-boehmer"
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"time_started": "23:24:10 18-02-2026",
+		"subject_ids":  []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started":  "23:24:10 18-02-2026",
+		"time_finished": "15:13:05 04-03-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"), map[string]any{
+		"time_started":  "15:13:05 04-03-2026",
+		"time_finished": "16:04:15 04-03-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "third-step", "step.sg.md"), map[string]any{
+		"time_started":  "16:04:15 04-03-2026",
+		"time_finished": "16:15:15 04-03-2026",
+	}, "")
+
+	records, err := loadSessionRecords(root, protocol, map[string]store.Subject{})
+	if err != nil {
+		t.Fatalf("loadSessionRecords returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].CurrentStep != "Third Step" {
+		t.Fatalf("expected current step to remain on last progressed step, got %q", records[0].CurrentStep)
+	}
+	model := sessionsSwitchboardModel{protocol: protocol}
+	_, _, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
+	if !strings.Contains(stepText, "Third Step") {
+		t.Fatalf("expected step text to include Third Step, got %q", stepText)
 	}
 }
 

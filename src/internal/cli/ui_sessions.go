@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -12,6 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"study-guide/src/internal/store"
+	"study-guide/src/internal/util"
 )
 
 type sessionsView int
@@ -47,7 +51,8 @@ type sessionsSwitchboardModel struct {
 	browseEntries []browseEntry
 
 	createLookup      map[string]string
-	armedSessionSlug  string
+	actionCursor      sessionActionCursor
+	activeSessionSlug string
 	subjects          []store.Subject
 	selectedBySubject map[string]bool
 
@@ -57,11 +62,40 @@ type sessionsSwitchboardModel struct {
 }
 
 var subtleTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+var focusedTokenPattern = regexp.MustCompile(`\{[^{}\n]+\}`)
+var actionCellTokenPattern = regexp.MustCompile("\x1e([^\x1e\x1f\n]*)\x1f")
+const actionCellANSIPrefix = "\x1b[38;5;252;48;5;238m"
+const actionCellANSISuffix = "\x1b[0m"
+const focusedTokenANSIPrefix = "\x1b[1;38;5;230;48;5;62m"
+const focusedTokenANSISuffix = "\x1b[0m"
 
 const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
+const sessionsCreateItemIndent = "  "
+
+type sessionActionCursor string
+
+const (
+	sessionActionCursorActive   sessionActionCursor = "active"
+	sessionActionCursorNextStep sessionActionCursor = "next-step"
+)
 
 func sessionsNextStepTextStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+}
+
+func sessionsCreateItemLabel(label string) string {
+	return sessionsCreateItemIndent + label
+}
+
+func newCreateListDelegate() list.DefaultDelegate {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Padding(0, 0, 0, 0)
+	delegate.Styles.DimmedTitle = delegate.Styles.DimmedTitle.Padding(0, 0, 0, 0)
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
+		Border(lipgloss.NormalBorder(), false, false, false, false).
+		Padding(0, 0, 0, 0)
+	return delegate
 }
 
 func newSessionsFilterInput() textinput.Model {
@@ -83,10 +117,7 @@ const (
 func sessionsSelectedRowStyle(base lipgloss.Style) lipgloss.Style {
 	return base.
 		Foreground(lipgloss.NoColor{}).
-		Background(lipgloss.AdaptiveColor{
-			Light: sessionsSelectedRowBgLight,
-			Dark:  sessionsSelectedRowBgDark,
-		}).
+		Background(lipgloss.NoColor{}).
 		Reverse(false).
 		Bold(false)
 }
@@ -109,8 +140,9 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 		table.WithColumns([]table.Column{
 			{Title: "SLUG", Width: 24},
 			{Title: "SUBJECT", Width: 30},
+			{Title: "ACTIVE", Width: 24},
 			{Title: "STEP", Width: 24},
-			{Title: "NEXT STEP", Width: 52},
+			{Title: "NEXT", Width: 52},
 		}),
 		table.WithRows(nil),
 		table.WithFocused(true),
@@ -134,6 +166,7 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 		filter:            fi,
 		list:              createList,
 		selectedBySubject: map[string]bool{},
+		actionCursor:      sessionActionCursorActive,
 		width:             120,
 	}
 	m.applyBrowseTableLayout()
@@ -172,12 +205,6 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			switch m.view {
 			case sessionsViewBrowse:
-				if m.armedSessionSlug != "" {
-					m.armedSessionSlug = ""
-					m.applyBrowseEntries()
-					m.message = ""
-					return m, nil
-				}
 				return m, tea.Quit
 			case sessionsViewCreate:
 				if err := m.refreshBrowseList(); err != nil {
@@ -193,10 +220,23 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == sessionsViewCreate {
 				return m.handleCreateEnter()
 			}
+		case "left", "h":
+			if m.view == sessionsViewBrowse {
+				m.moveActionCursorLeft()
+				m.applyBrowseEntries()
+				return m, nil
+			}
+		case "right", "l":
+			if m.view == sessionsViewBrowse {
+				m.moveActionCursorRight()
+				m.applyBrowseEntries()
+				return m, nil
+			}
 		}
 	}
 
 	if m.view == sessionsViewBrowse {
+		oldCursor := m.table.Cursor()
 		oldFilter := m.filter.Value()
 		var cmdFilter tea.Cmd
 		m.filter, cmdFilter = m.filter.Update(msg)
@@ -205,6 +245,9 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmdTable tea.Cmd
 		m.table, cmdTable = m.table.Update(msg)
+		if m.table.Cursor() != oldCursor {
+			m.applyBrowseEntries()
+		}
 		return m, tea.Batch(cmdFilter, cmdTable)
 	}
 
@@ -219,7 +262,7 @@ func (m sessionsSwitchboardModel) View() string {
 		header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
 		b.WriteString(header)
 		b.WriteString("\n")
-		b.WriteString(subtleTextStyle.Render(sessionsCreateInfoText))
+		b.WriteString(subtleTextStyle.Render(sessionsCreateItemLabel(sessionsCreateInfoText)))
 		b.WriteString("\n")
 		b.WriteString(m.list.View())
 		if strings.TrimSpace(m.message) != "" {
@@ -241,20 +284,18 @@ func (m sessionsSwitchboardModel) View() string {
 	var b strings.Builder
 	b.WriteString(m.filter.View())
 	b.WriteString("\n")
-	b.WriteString(m.table.View())
+	tableView := m.table.View()
+	tableView = styleBrowseActionCells(tableView)
+	tableView = styleBrowseFocusedTokens(tableView)
+	b.WriteString(tableView)
 	b.WriteString("\n")
 	b.WriteString(subtleTextStyle.Render(current))
 	if strings.TrimSpace(m.message) != "" {
 		b.WriteString("\n")
 		b.WriteString(subtleTextStyle.Render(m.message))
 	}
-	if m.armedSessionSlug != "" {
-		b.WriteString("\n")
-		b.WriteString(subtleTextStyle.Render("esc to cancel"))
-	} else {
-		b.WriteString("\n")
-		b.WriteString(subtleTextStyle.Render("ctrl+n to create new; esc to quit"))
-	}
+	b.WriteString("\n")
+	b.WriteString(subtleTextStyle.Render("ctrl+n to create new; esc to quit"))
 	return b.String()
 }
 
@@ -273,10 +314,29 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 			m.message = "invalid: " + rec.InvalidReason
 			return m, nil
 		}
-		if m.armedSessionSlug != rec.Slug {
-			m.armedSessionSlug = rec.Slug
-			m.applyBrowseEntries()
-			m.message = ""
+		if m.actionCursor == sessionActionCursorActive {
+			if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
+				m.message = "activate failed: " + err.Error()
+				return m, nil
+			}
+			if rec.NextAction == "start" && rec.ProgressSteps == 0 {
+				res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
+				if err != nil {
+					m.message = "activate failed: " + err.Error()
+					return m, nil
+				}
+				if err := m.refreshBrowseList(); err != nil {
+					m.err = err
+					return m, tea.Quit
+				}
+				m.message = fmt.Sprintf("session=%s state=activated+%s step=%s", rec.Slug, res.State, res.StepSlug)
+				return m, nil
+			}
+			if err := m.refreshBrowseList(); err != nil {
+				m.err = err
+				return m, tea.Quit
+			}
+			m.message = fmt.Sprintf("session=%s state=activated", rec.Slug)
 			return m, nil
 		}
 		res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
@@ -284,7 +344,6 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 			m.message = "advance failed: " + err.Error()
 			return m, nil
 		}
-		m.armedSessionSlug = ""
 		if err := m.refreshBrowseList(); err != nil {
 			m.err = err
 			return m, tea.Quit
@@ -326,7 +385,7 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 		uid := strings.TrimPrefix(token, "subject:")
 		m.selectedBySubject[uid] = !m.selectedBySubject[uid]
 		m.refreshCreateList()
-		m.message = fmt.Sprintf("selected subjects: %d", len(m.selectedSubjects()))
+		m.message = ""
 		return m, nil
 	}
 }
@@ -345,8 +404,14 @@ func (m *sessionsSwitchboardModel) refreshBrowseList() error {
 	if err != nil {
 		return err
 	}
+	activeSlug, err := readActiveSessionSlug(m.root)
+	if err != nil {
+		return err
+	}
+	m.activeSessionSlug = activeSlug
 	m.browseRecords = m.browseRecords[:0]
 	for _, r := range records {
+		r.Active = r.Slug == activeSlug
 		if !r.Complete {
 			m.browseRecords = append(m.browseRecords, r)
 		}
@@ -387,9 +452,12 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 
 	rows := make([]table.Row, 0, len(entries))
 	targetCursor := 0
+	if selectedSlug == "" && len(entries) > 0 && entries[0].kind == browseEntrySession {
+		selectedSlug = entries[0].record.Slug
+	}
 	for i, e := range entries {
-		slug, subject, step, nextStep := m.renderEntryRow(e)
-		rows = append(rows, table.Row{slug, subject, step, nextStep})
+		slug, subject, active, step, nextStep := m.renderEntryRow(e)
+		rows = append(rows, table.Row{slug, subject, active, step, nextStep})
 		if e.kind == browseEntrySession && e.record.Slug == selectedSlug {
 			targetCursor = i
 		}
@@ -404,29 +472,63 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 
 func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 	total := max(m.width, 60)
-	// Keep slug/subject/step readable and give the remainder to NEXT STEP.
-	slugW := 35
-	subjectW := 35
-	stepW := 48
-	// Account for separators/padding inside the table renderer.
-	overhead := 12
-	nextW := total - slugW - subjectW - stepW - overhead
-	if nextW < 32 {
-		nextW = 32
+	// Fit columns to viewport while preserving readability.
+	const (
+		overhead = 12
+		nextMin  = 16
+	)
+	pref := []int{35, 35, 24, 48}
+	mins := []int{14, 14, 8, 20}
+	sumPref := 0
+	for _, w := range pref {
+		sumPref += w
+	}
+	budget := total - overhead - nextMin
+	if budget < 0 {
+		budget = 0
+	}
+	widths := append([]int(nil), pref...)
+	if sumPref > budget {
+		deficit := sumPref - budget
+		for deficit > 0 {
+			progress := false
+			for i := range widths {
+				if widths[i] > mins[i] {
+					widths[i]--
+					deficit--
+					progress = true
+					if deficit == 0 {
+						break
+					}
+				}
+			}
+			if !progress {
+				break
+			}
+		}
+	}
+	slugW := widths[0]
+	subjectW := widths[1]
+	activeW := widths[2]
+	stepW := widths[3]
+	nextW := total - overhead - slugW - subjectW - activeW - stepW
+	if nextW < nextMin {
+		nextW = nextMin
 	}
 	m.table.SetColumns([]table.Column{
 		{Title: "SLUG", Width: slugW},
 		{Title: "SUBJECT", Width: subjectW},
+		{Title: "ACTIVE", Width: activeW},
 		{Title: "STEP", Width: stepW},
-		{Title: "NEXT STEP", Width: nextW},
+		{Title: "NEXT", Width: nextW},
 	})
 	m.table.SetWidth(total)
 }
 
-func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string) {
+func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string, string) {
 	switch e.kind {
 	case browseEntryEmpty:
-		return "no active sessions", "", "", ""
+		return "no active sessions", "", "", "", ""
 	case browseEntrySession:
 		rec := e.record
 		subjectText := strings.Join(rec.SubjectNames, ", ")
@@ -450,26 +552,38 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if stepNum > rec.StepCount {
 			stepNum = rec.StepCount
 		}
+		if current == "-" && stepNum > 0 && stepNum <= len(m.protocol.Steps) {
+			current = m.protocol.Steps[stepNum-1].Name
+		}
 		stepText := fmt.Sprintf("[%d/%d] %s", stepNum, rec.StepCount, current)
 		next := rec.NextStep
 		if strings.TrimSpace(next) == "" {
 			next = "-"
 		}
-		nextText := next
-		if rec.Slug == m.armedSessionSlug {
-			if next != "-" {
-				nextText = next + " (enter to advance)"
-			}
-			return rec.Slug, subjectText, stepText, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("230")).
-				Background(lipgloss.Color("62")).
-				Bold(true).
-				Padding(0, 1).
-				Render(nextText)
+		activeText := "activate"
+		if rec.Active {
+			activeText = "active"
 		}
-		return rec.Slug, subjectText, stepText, sessionsNextStepTextStyle().Render(nextText)
+		activeStyled := encodeActionCellToken(activeText)
+		nextStyled := encodeActionCellToken(next)
+		selectedSlug := ""
+		if sel, ok := m.selectedBrowseEntry(); ok && sel.kind == browseEntrySession {
+			selectedSlug = sel.record.Slug
+		}
+		if selectedSlug == "" && len(m.browseEntries) > 0 && m.browseEntries[0].kind == browseEntrySession {
+			selectedSlug = m.browseEntries[0].record.Slug
+		}
+		if rec.Slug == selectedSlug {
+			if m.actionCursor == sessionActionCursorActive {
+				activeStyled = encodeActionCellToken("{" + activeText + "}")
+			} else {
+				nextStyled = encodeActionCellToken("{" + next + "}")
+			}
+			return rec.Slug, subjectText, activeStyled, stepText, nextStyled
+		}
+		return rec.Slug, subjectText, activeStyled, stepText, nextStyled
 	default:
-		return "", "", "", ""
+		return "", "", "", "", ""
 	}
 }
 
@@ -488,23 +602,23 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 	items := make([]list.Item, 0, len(m.subjects)+1)
 	m.createLookup = map[string]string{}
 	if len(m.subjects) == 0 {
-		items = append(items, listItem("No subjects available"))
+		items = append(items, listItem(sessionsCreateItemLabel("No subjects available")))
 	} else {
 		for _, s := range m.subjects {
 			marker := "[ ]"
 			if m.selectedBySubject[s.UUID] {
 				marker = "[x]"
 			}
-			label := fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0])
+			label := sessionsCreateItemLabel(fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0]))
 			items = append(items, listItem(label))
 			m.createLookup[label] = "subject:" + s.UUID
 		}
 	}
-	items = append(items, listItem("Create"))
-	m.createLookup["Create"] = "create"
+	createLabel := sessionsCreateItemLabel("Create")
+	items = append(items, listItem(createLabel))
+	m.createLookup[createLabel] = "create"
 
-	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
+	delegate := newCreateListDelegate()
 	m.list = list.New(items, delegate, 100, 18)
 	m.list.Title = "Create Session"
 	m.list.SetShowTitle(false)
@@ -522,6 +636,45 @@ func (m *sessionsSwitchboardModel) selectedSubjects() []store.Subject {
 		}
 	}
 	return out
+}
+
+func (m *sessionsSwitchboardModel) moveActionCursorRight() {
+	m.actionCursor = sessionActionCursorNextStep
+}
+
+func (m *sessionsSwitchboardModel) moveActionCursorLeft() {
+	m.actionCursor = sessionActionCursorActive
+}
+
+func readActiveSessionSlug(root string) (string, error) {
+	studyPath := filepath.Join(root, "study.sg.md")
+	fm, _, err := util.ReadFrontmatterFile(studyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(asString(fm["active_session_slug"])), nil
+}
+
+func setActiveSessionSlug(root, sessionSlug string) error {
+	studyPath := filepath.Join(root, "study.sg.md")
+	return setFrontmatterField(studyPath, "active_session_slug", sessionSlug)
+}
+
+func styleBrowseFocusedTokens(s string) string {
+	return focusedTokenPattern.ReplaceAllStringFunc(s, func(token string) string {
+		return focusedTokenANSIPrefix + token + focusedTokenANSISuffix
+	})
+}
+
+func styleBrowseActionCells(s string) string {
+	return actionCellTokenPattern.ReplaceAllString(s, actionCellANSIPrefix+"$1"+actionCellANSISuffix)
+}
+
+func encodeActionCellToken(s string) string {
+	return "\x1e" + s + "\x1f"
 }
 
 func max(a, b int) int {

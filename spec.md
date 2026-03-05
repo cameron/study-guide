@@ -224,39 +224,46 @@ Interactive session switchboard for running multiple sessions in parallel from o
 Behavior:
 1. Shows only incomplete sessions.
 2. Provides an autocomplete query over subject name and session slug.
-3. In the same list view, press `Enter` once to arm the highlighted session/action.
-4. Press `Enter` again (on the same row) to execute the default action:
-- start first protocol step (if no step has started yet)
-- advance to next step (if currently between first and last step)
-- finish session (if currently on final step)
-5. Press `Esc` to cancel an armed action (no dedicated `Back` item/screen).
-6. Includes an action to create a new session without leaving the switchboard.
-7. The session list view uses compact single-line rows (no blank description line).
+3. Browse table columns are ordered: `SLUG | SUBJECT | ACTIVE | STEP | NEXT`.
+4. `ACTIVE` and `NEXT` columns are actionable cells.
+5. The selected row (default top row) always has an active action cursor.
+6. Arrow key behavior:
+- up/down: move selected row
+- left/right: move action cursor between `ACTIVE` and `NEXT` in the selected row
+7. Press `Enter` to execute the action under the active action cursor:
+- `ACTIVE`: mark that session as the single active session in study frontmatter (`study.sg.md` key `active_session_slug`); if the session has not started any protocol step yet, also auto-start its first step
+- `NEXT`: perform exactly one timing transition (`start`, `advance`, or `finish`) based on current session progress
+8. Press `Esc` to quit browse view.
+9. Includes an action to create a new session without leaving the switchboard.
+10. The session list view uses compact single-line rows (no blank description line).
    Unarmed row format includes step progress: `<slug> | <subject> | <X>/<Y> <current step>`.
    The browse view is implemented with a table component (column headers visible).
    Step progress is rendered as `[X/Y]`.
    `X` is the count of protocol steps progressed so far (implicitly-finished earlier steps count, plus the currently active step when present).
-8. The list control/help legend is hidden on this screen.
-9. Replace generic item-count status text with `current step: <step-name|->` status text.
-10. When an action is armed, update that same session row inline (not below the list), for example:
-- `<slug> | <subject> | <X>/<Y> <current step> "enter to advance to <next step>?"`
-11. Show `esc to cancel` as subtle/grey helper text.
-12. The browse view includes a `Next Step` column:
-- unarmed rows: next step name rendered in subtle/grey style
-- armed row: same next-step name rendered with high-contrast emphasis and suffix ` (enter to advance)`
-  - when the default action is `finish` (active step is final protocol step), `Next Step` text is `conclude`
-   Browse table base column widths are absolute: `SLUG=35`, `SUBJECT=35`, `STEP=48`; `NEXT STEP` gets the remaining width with minimum `32`.
-   Unarmed `Next Step` text should use a brighter grey than footer/helper text (target color: ANSI 256 color `246`).
-13. Filter prompt text is ` filter: ` (one leading space; no separate `Sessions` heading line).
+11. The list control/help legend is hidden on this screen.
+12. Replace generic item-count status text with `current step: <step-name|->` status text.
+13. In selected row, the focused actionable cell is visually emphasized (high-contrast and bracketed).
+14. `ACTIVE` column text is:
+- `active` when row is the currently active session
+- `activate` otherwise
+15. `NEXT` column shows the next transition label (or `conclude` when progress action is `finish`).
+   Actionable cells (`ACTIVE` and `NEXT`) use a subtle default background tint to indicate CTA affordance even when unfocused.
+16. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `ACTIVE=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).
+   Unfocused action text and `NEXT` text should use a brighter grey than footer/helper text (target color: ANSI 256 color `246`).
+17. Filter prompt text is ` filter: ` (one leading space; no separate `Sessions` heading line).
    Filter placeholder text is exactly `by subject or slug`.
-14. Browse table does not include `Create new session` or `Exit` rows.
+18. Browse table does not include `Create new session` or `Exit` rows.
    When there are no incomplete sessions, the table shows a single empty-state row: `no active sessions`.
-15. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
-16. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
+19. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
+20. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
    The selected-row tint should include a slight blue hue with exact adaptive colors: light `#d9dcef`, dark `#262b3a`.
-17. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
-18. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-19. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
+21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
+22. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+23. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
+24. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
+25. Create-mode list item labels are uniformly indented with exactly two leading spaces.
+26. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
+27. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
@@ -390,7 +397,7 @@ All criteria below are pass/fail requirements for v1.
 8. All timestamps in session and step files use `HH:MM:SS DD-MM-YYYY`.
 9. `session.sg.md` frontmatter key order writes `time_started` before `time_finished` when both exist.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
-11. In `sg sessions`, a second `Enter` after selection executes exactly one transition (`start`, `advance`, or `finish`) based on current session progress.
+11. In `sg sessions`, `Enter` executes the currently focused action cell: `ACTIVE` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
 13. `sg current-session advance` works from within a session directory without requiring `cd` to other sessions.
 14. `sg current-session advance --session <slug>` advances a specific session from study root (or any path within the study).
@@ -460,3 +467,4 @@ All criteria below are pass/fail requirements for v1.
 - ingest command behavior using `--assets-dir` fixtures against `study-eg`
 3. `go test ./...` passes in a clean checkout.
 4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.
+5. TUI behavior tests should prefer stable contract and snapshot-style assertions (rendered text states and key layout invariants) over many micro-assertions of individual style properties.

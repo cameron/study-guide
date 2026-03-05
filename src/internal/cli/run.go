@@ -501,6 +501,7 @@ type sessionRecord struct {
 	StepCount      int
 	NextStep       string
 	Complete       bool
+	Active         bool
 	NextAction     string
 	InvalidReason  string
 }
@@ -545,6 +546,16 @@ func loadSessionRecords(root string, protocol store.Protocol, subjectByID map[st
 			if progress.ActiveStepIdx >= 0 && progress.ActiveStepIdx < len(protocol.Steps) {
 				rec.CurrentStep = protocol.Steps[progress.ActiveStepIdx].Name
 				rec.CurrentStepIdx = progress.ActiveStepIdx
+			} else if progress.ProgressSteps > 0 {
+				// When no step is currently active, show the last progressed step.
+				lastProgressed := progress.ProgressSteps - 1
+				if lastProgressed >= len(protocol.Steps) {
+					lastProgressed = len(protocol.Steps) - 1
+				}
+				if lastProgressed >= 0 {
+					rec.CurrentStep = protocol.Steps[lastProgressed].Name
+					rec.CurrentStepIdx = lastProgressed
+				}
 			}
 			rec.NextAction = progress.NextAction
 			switch progress.NextAction {
