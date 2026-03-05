@@ -244,13 +244,19 @@ Behavior:
 12. The browse view includes a `Next Step` column:
 - unarmed rows: next step name rendered in subtle/grey style
 - armed row: same next-step name rendered with high-contrast emphasis and suffix ` (enter to advance)`
+  - when the default action is `finish` (active step is final protocol step), `Next Step` text is `conclude`
    Browse table base column widths are absolute: `SLUG=35`, `SUBJECT=35`, `STEP=48`; `NEXT STEP` gets the remaining width with minimum `32`.
+   Unarmed `Next Step` text should use a brighter grey than footer/helper text (target color: ANSI 256 color `246`).
 13. Filter prompt text is ` filter: ` (one leading space; no separate `Sessions` heading line).
+   Filter placeholder text is exactly `by subject or slug`.
 14. Browse table does not include `Create new session` or `Exit` rows.
+   When there are no incomplete sessions, the table shows a single empty-state row: `no active sessions`.
 15. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
 16. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
-17. In create mode, selecting `Done` returns to the browse sessions table (showing the created session when applicable).
-18. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
+   The selected-row tint should include a slight blue hue with exact adaptive colors: light `#d9dcef`, dark `#262b3a`.
+17. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
+18. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+19. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.

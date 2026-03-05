@@ -561,6 +561,8 @@ func loadSessionRecords(root string, protocol store.Protocol, subjectByID map[st
 				if target >= 0 && target < len(protocol.Steps) {
 					rec.NextStep = protocol.Steps[target].Name
 				}
+			case "finish":
+				rec.NextStep = "conclude"
 			}
 			rec.Complete = progress.SessionFinished && progress.NextAction == "none"
 			if progress.SessionFinished && progress.NextAction != "none" {

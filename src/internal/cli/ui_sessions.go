@@ -58,10 +58,26 @@ type sessionsSwitchboardModel struct {
 
 var subtleTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
+const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
+
+func sessionsNextStepTextStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+}
+
+func newSessionsFilterInput() textinput.Model {
+	fi := textinput.New()
+	fi.Prompt = " filter: "
+	fi.Placeholder = "by subject or slug"
+	fi.CharLimit = 120
+	fi.Width = 60
+	fi.Focus()
+	return fi
+}
+
 const (
 	// Approximate 15% luminance delta from pure white/black for selection tint.
-	sessionsSelectedRowBgLight = "#d9d9d9"
-	sessionsSelectedRowBgDark  = "#262626"
+	sessionsSelectedRowBgLight = "#d9dcef"
+	sessionsSelectedRowBgDark  = "#262b3a"
 )
 
 func sessionsSelectedRowStyle(base lipgloss.Style) lipgloss.Style {
@@ -103,12 +119,7 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 	tblStyles := table.DefaultStyles()
 	tblStyles.Selected = sessionsSelectedRowStyle(tblStyles.Selected)
 	tbl.SetStyles(tblStyles)
-	fi := textinput.New()
-	fi.Prompt = " filter: "
-	fi.Placeholder = "type to filter by subject or slug"
-	fi.CharLimit = 120
-	fi.Width = 60
-	fi.Focus()
+	fi := newSessionsFilterInput()
 
 	createList := list.New([]list.Item{}, list.NewDefaultDelegate(), 100, 18)
 	createList.SetShowHelp(false)
@@ -155,7 +166,7 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.subjects = subs
 				m.selectedBySubject = map[string]bool{}
 				m.refreshCreateList()
-				m.message = "select one or more subjects, then choose Done"
+				m.message = ""
 				return m, nil
 			}
 		case "esc":
@@ -204,10 +215,18 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m sessionsSwitchboardModel) View() string {
 	if m.view == sessionsViewCreate {
-		if strings.TrimSpace(m.message) == "" {
-			return m.list.View()
+		var b strings.Builder
+		header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
+		b.WriteString(header)
+		b.WriteString("\n")
+		b.WriteString(subtleTextStyle.Render(sessionsCreateInfoText))
+		b.WriteString("\n")
+		b.WriteString(m.list.View())
+		if strings.TrimSpace(m.message) != "" {
+			b.WriteString("\n")
+			b.WriteString(subtleTextStyle.Render(m.message))
 		}
-		return m.list.View() + "\n" + subtleTextStyle.Render(m.message)
+		return b.String()
 	}
 
 	current := "current step: -"
@@ -284,10 +303,10 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 	}
 	choice := string(it)
 	switch token := m.createLookup[choice]; token {
-	case "done":
+	case "create":
 		selected := m.selectedSubjects()
 		if len(selected) == 0 {
-			m.message = "select at least one subject before Done"
+			m.message = "select at least one subject before Create"
 			return m, nil
 		}
 		slug, _, err := createSessionScaffold(m.root, selected)
@@ -407,7 +426,7 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string) {
 	switch e.kind {
 	case browseEntryEmpty:
-		return "No incomplete sessions", "", "", ""
+		return "no active sessions", "", "", ""
 	case browseEntrySession:
 		rec := e.record
 		subjectText := strings.Join(rec.SubjectNames, ", ")
@@ -448,7 +467,7 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 				Padding(0, 1).
 				Render(nextText)
 		}
-		return rec.Slug, subjectText, stepText, subtleTextStyle.Render(nextText)
+		return rec.Slug, subjectText, stepText, sessionsNextStepTextStyle().Render(nextText)
 	default:
 		return "", "", "", ""
 	}
@@ -481,13 +500,14 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 			m.createLookup[label] = "subject:" + s.UUID
 		}
 	}
-	items = append(items, listItem("Done"))
-	m.createLookup["Done"] = "done"
+	items = append(items, listItem("Create"))
+	m.createLookup["Create"] = "create"
 
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = false
 	m.list = list.New(items, delegate, 100, 18)
-	m.list.Title = "Create Session (select subject(s), then Done; Esc to cancel)"
+	m.list.Title = "Create Session"
+	m.list.SetShowTitle(false)
 	m.list.SetShowHelp(false)
 	m.list.SetShowStatusBar(false)
 	m.list.SetShowPagination(false)

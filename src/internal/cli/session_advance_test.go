@@ -180,6 +180,9 @@ func TestLoadSessionRecords_ToleratesImplicitStepCompletion(t *testing.T) {
 	if records[0].NextAction != "finish" {
 		t.Fatalf("expected finish next action, got %q", records[0].NextAction)
 	}
+	if records[0].NextStep != "conclude" {
+		t.Fatalf("expected conclude next step label, got %q", records[0].NextStep)
+	}
 	if records[0].InvalidReason != "" {
 		t.Fatalf("did not expect invalid reason, got %q", records[0].InvalidReason)
 	}
