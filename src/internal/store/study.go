@@ -17,8 +17,9 @@ type Protocol struct {
 }
 
 type ProtocolStep struct {
-	Name string
-	Slug string
+	Name        string
+	Slug        string
+	Description string
 }
 
 func ReadRequiredSubjectFields(studyRoot string) ([]string, error) {
@@ -74,6 +75,8 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 	seenSteps := false
 	var summaryLines []string
 	var steps []ProtocolStep
+	stepDescriptions := map[int][]string{}
+	currentStepIdx := -1
 
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -83,15 +86,18 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 				seenSummary = true
 				inSummary = true
 				inSteps = false
+				currentStepIdx = -1
 				continue
 			case "# Steps":
 				seenSteps = true
 				inSteps = true
 				inSummary = false
+				currentStepIdx = -1
 				continue
 			default:
 				inSummary = false
 				inSteps = false
+				currentStepIdx = -1
 			}
 		}
 		if inSummary {
@@ -100,12 +106,17 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 		if inSteps && strings.HasPrefix(line, "## ") {
 			name := strings.TrimSpace(strings.TrimPrefix(line, "## "))
 			if name == "" {
+				currentStepIdx = -1
 				continue
 			}
 			steps = append(steps, ProtocolStep{
 				Name: name,
-				Slug: util.Slugify(name),
 			})
+			currentStepIdx = len(steps) - 1
+			continue
+		}
+		if inSteps && currentStepIdx >= 0 && !strings.HasPrefix(line, "#") {
+			stepDescriptions[currentStepIdx] = append(stepDescriptions[currentStepIdx], raw)
 		}
 	}
 
@@ -115,6 +126,15 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 	if !seenSteps {
 		return Protocol{}, fmt.Errorf("protocol.sg.md missing required section: # Steps")
 	}
+	for i := range steps {
+		base := util.Slugify(steps[i].Name)
+		if strings.TrimSpace(base) == "" {
+			base = "step"
+		}
+		steps[i].Slug = fmt.Sprintf("%02d-%s", i+1, base)
+		steps[i].Description = strings.TrimSpace(strings.Join(stepDescriptions[i], "\n"))
+	}
+
 	return Protocol{
 		Summary: strings.TrimSpace(strings.Join(summaryLines, "\n")),
 		Steps:   steps,

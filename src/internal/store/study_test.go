@@ -29,11 +29,71 @@ Optional`
 	if len(p.Steps) != 2 {
 		t.Fatalf("unexpected steps count: %d", len(p.Steps))
 	}
-	if p.Steps[0].Name != "First Exposure" || p.Steps[0].Slug != "first-exposure" {
+	if p.Steps[0].Name != "First Exposure" || p.Steps[0].Slug != "01-first-exposure" {
 		t.Fatalf("unexpected first step: %#v", p.Steps[0])
 	}
-	if p.Steps[1].Name != "Second Exposure" || p.Steps[1].Slug != "second-exposure" {
+	if p.Steps[1].Name != "Second Exposure" || p.Steps[1].Slug != "02-second-exposure" {
 		t.Fatalf("unexpected second step: %#v", p.Steps[1])
+	}
+}
+
+func TestParseProtocolMarkdown_DuplicateStepNamesGetUniqueSlugs(t *testing.T) {
+	md := `# Protocol Summary
+
+Summary text.
+
+# Steps
+
+## WiFi
+
+## Grounding
+
+## WiFi
+
+## Grounding
+`
+	p, err := ParseProtocolMarkdown(md)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(p.Steps) != 4 {
+		t.Fatalf("unexpected steps count: %d", len(p.Steps))
+	}
+	got := []string{p.Steps[0].Slug, p.Steps[1].Slug, p.Steps[2].Slug, p.Steps[3].Slug}
+	want := []string{"01-wifi", "02-grounding", "03-wifi", "04-grounding"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected duplicate slug disambiguation: got=%v want=%v", got, want)
+	}
+}
+
+func TestParseProtocolMarkdown_ParsesOptionalStepDescriptions(t *testing.T) {
+	md := `# Protocol Summary
+
+Summary text.
+
+# Steps
+
+## First Exposure
+
+Set baseline illumination.
+
+## Ground
+
+Grounding notes line one.
+Grounding notes line two.
+`
+	p, err := ParseProtocolMarkdown(md)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(p.Steps) != 2 {
+		t.Fatalf("unexpected steps count: %d", len(p.Steps))
+	}
+	if got := p.Steps[0].Description; got != "Set baseline illumination." {
+		t.Fatalf("unexpected first description: %q", got)
+	}
+	if got := p.Steps[1].Description; got != "Grounding notes line one.\nGrounding notes line two." {
+		t.Fatalf("unexpected second description: %q", got)
 	}
 }
 

@@ -22,9 +22,17 @@ import (
 	"study-guide/src/internal/util"
 )
 
+var (
+	cmdInitRunner     = cmdInit
+	cmdSessionsRunner = cmdSessions
+)
+
 func Run(args []string) int {
 	if len(args) == 0 {
-		printHelp()
+		if err := cmdDefault(); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
 		return 0
 	}
 	var err error
@@ -60,6 +68,37 @@ func Run(args []string) int {
 	return 0
 }
 
+func cmdDefault() error {
+	// Inside a study: jump directly into session switchboard.
+	if _, err := util.StudyRootFromCwd(); err == nil {
+		return cmdSessionsRunner()
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	studyPath := filepath.Join(cwd, "study.sg.md")
+	// Missing study file in cwd: scaffold first, then continue into sessions.
+	if _, err := os.Stat(studyPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := cmdInitRunner(); err != nil {
+			return err
+		}
+		if _, err := os.Stat(studyPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		clearTerminalScreen()
+		return cmdSessionsRunner()
+	}
+	printHelp()
+	return nil
+}
+
 func printHelp() {
 	fmt.Println(`sg - Study Guide CLI
 
@@ -81,7 +120,7 @@ func cmdInit() error {
 	}
 	vals, canceled, err := runForm("Initialize Study", []formField{
 		{Name: "study_name", Label: "Study Name", Required: true},
-		{Name: "protocol_outline", Label: "Protocol Steps (comma-separated)", Required: false},
+		{Name: "protocol_outline", Label: "Protocol Steps (one per line, optional: name | description)", Required: false},
 	})
 	if err != nil {
 		return err
@@ -96,7 +135,7 @@ func cmdInit() error {
 	}
 	outlineSteps := parseOutlineSteps(vals["protocol_outline"])
 	if len(outlineSteps) == 0 {
-		outlineSteps = []string{"First Step"}
+		outlineSteps = []protocolOutlineStep{{Name: "First Step"}}
 	}
 	if err := ensureStudyFile(filepath.Join(cwd, "study.sg.md"), studyName); err != nil {
 		return err
@@ -114,16 +153,42 @@ func cmdInit() error {
 	return nil
 }
 
-func parseOutlineSteps(raw string) []string {
-	parts := strings.Split(raw, ",")
-	steps := make([]string, 0, len(parts))
-	for _, p := range parts {
-		step := strings.TrimSpace(p)
-		if step != "" {
-			steps = append(steps, step)
+type protocolOutlineStep struct {
+	Name        string
+	Description string
+}
+
+func parseOutlineSteps(raw string) []protocolOutlineStep {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	lines := strings.Split(raw, "\n")
+	steps := make([]protocolOutlineStep, 0, len(lines))
+	for _, line := range lines {
+		for _, part := range strings.Split(line, ",") {
+			step, ok := parseOutlineStep(part)
+			if ok {
+				steps = append(steps, step)
+			}
 		}
 	}
 	return steps
+}
+
+func parseOutlineStep(raw string) (protocolOutlineStep, bool) {
+	part := strings.TrimSpace(raw)
+	if part == "" {
+		return protocolOutlineStep{}, false
+	}
+	name := part
+	desc := ""
+	if strings.Contains(part, "|") {
+		p := strings.SplitN(part, "|", 2)
+		name = strings.TrimSpace(p[0])
+		desc = strings.TrimSpace(p[1])
+	}
+	if name == "" {
+		return protocolOutlineStep{}, false
+	}
+	return protocolOutlineStep{Name: name, Description: desc}, true
 }
 
 func ensureFile(path, content string) error {
@@ -145,18 +210,29 @@ func ensureStudyFile(path, studyName string) error {
 	return util.WriteFrontmatterFile(path, fm, body)
 }
 
-func ensureProtocolFile(path string, steps []string) error {
+func ensureProtocolFile(path string, steps []protocolOutlineStep) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
 	var b strings.Builder
 	b.WriteString("# Protocol Summary\n\nDescribe the protocol.\n\n# Steps\n\n")
 	for _, s := range steps {
+		if strings.TrimSpace(s.Name) == "" {
+			continue
+		}
 		b.WriteString("## ")
-		b.WriteString(s)
+		b.WriteString(s.Name)
 		b.WriteString("\n\n")
+		if strings.TrimSpace(s.Description) != "" {
+			b.WriteString(s.Description)
+			b.WriteString("\n\n")
+		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func clearTerminalScreen() {
+	fmt.Print("\x1b[2J\x1b[H")
 }
 
 func cmdSubject(args []string) error {
@@ -648,6 +724,17 @@ func inspectSessionProgress(sessionDir string, protocol store.Protocol) (session
 		finishedFlags[i] = finished
 	}
 
+	seenUnstarted := false
+	for i := range protocol.Steps {
+		if !startedFlags[i] {
+			seenUnstarted = true
+			continue
+		}
+		if seenUnstarted {
+			return sessionProgress{}, fmt.Errorf("non-contiguous protocol progress: step %q started before earlier missing step", protocol.Steps[i].Slug)
+		}
+	}
+
 	// Treat an earlier started step as effectively finished when a later step has started.
 	for i := range protocol.Steps {
 		if !startedFlags[i] {
@@ -939,6 +1026,10 @@ func cmdPublish() error {
 	if err != nil {
 		return err
 	}
+	return cmdPublishAtRoot(root)
+}
+
+func cmdPublishAtRoot(root string) error {
 	issues, err := collectStatusIssues(root)
 	if err != nil {
 		return err

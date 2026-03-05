@@ -11,10 +11,10 @@ import (
 
 func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	root := t.TempDir()
-	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step")); err != nil {
+	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "01-first-step")); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
-	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "second-step")); err != nil {
+	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "02-second-step")); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "study.sg.md"), map[string]any{
@@ -29,12 +29,12 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "session.sg.md"), map[string]any{}, ""); err != nil {
 		t.Fatalf("write session failed: %v", err)
 	}
-	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step", "step.sg.md"), map[string]any{
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "01-first-step", "step.sg.md"), map[string]any{
 		"time_started": "10:00:00 01-01-2026",
 	}, ""); err != nil {
 		t.Fatalf("write step failed: %v", err)
 	}
-	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "second-step", "step.sg.md"), map[string]any{
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "02-second-step", "step.sg.md"), map[string]any{
 		"time_started": "10:05:00 01-01-2026",
 	}, ""); err != nil {
 		t.Fatalf("write step failed: %v", err)
@@ -68,7 +68,7 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 		if strings.Contains(issue, "session missing required field time_started") {
 			t.Fatalf("did not expect session time_started status issue; issues=%v", issues)
 		}
-		if strings.Contains(issue, "step missing time_finished:") && strings.Contains(issue, "first-step") {
+		if strings.Contains(issue, "step missing time_finished:") && strings.Contains(issue, "01-first-step") {
 			t.Fatalf("did not expect non-final step missing time_finished issue; issues=%v", issues)
 		}
 	}

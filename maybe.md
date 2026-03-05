@@ -1,0 +1,6 @@
+- docs as in-directory dotfiles
+  - e.g., .protocol.sg.md has all available sections/formats with help text
+- protocol
+  - support multiple formats
+    - # Steps / ## step / description
+    - # Steps / - step: description / ...

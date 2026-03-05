@@ -64,7 +64,7 @@ func (m *sessionCreatePickerModel) refreshList() {
 	createSubjectLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSubject)
 	items = append(items, listItem(createSubjectLabel))
 	m.createLookup[createSubjectLabel] = "create-subject"
-	createLabel := sessionsCreateItemLabel("Create")
+	createLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSession)
 	items = append(items, listItem(createLabel))
 	m.createLookup[createLabel] = "create"
 	m.list.SetItems(items)

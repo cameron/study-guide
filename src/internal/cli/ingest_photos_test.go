@@ -165,7 +165,7 @@ func TestCollectSessionAssetHashes_DedupesByContent(t *testing.T) {
 func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
 
 	sessionA := "18-02-2026-boehmer"
 
@@ -220,11 +220,11 @@ func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-complete"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-complete"), studyRoot)
 
 	sessionSlug := "18-02-2026-boehmer"
 	stepRoot := filepath.Join(studyRoot, "session", sessionSlug, "step")
-	for _, step := range []string{"first-exposure", "ground", "second-exposure"} {
+	for _, step := range []string{"01-first-exposure", "02-ground", "03-second-exposure"} {
 		assetDir := filepath.Join(stepRoot, step, "asset")
 		if err := os.RemoveAll(assetDir); err != nil {
 			t.Fatalf("RemoveAll %s error: %v", assetDir, err)
@@ -234,7 +234,7 @@ func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 		}
 	}
 
-	assetsDir, err := filepath.Abs(filepath.Join("..", "..", "..", "test-data", "ingest-study-complete-assets"))
+	assetsDir, err := filepath.Abs(filepath.Join("..", "..", "..", "fixtures", "study-complete-assets"))
 	if err != nil {
 		t.Fatalf("Abs assets dir error: %v", err)
 	}
@@ -273,16 +273,16 @@ func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 		t.Fatalf("cmdIngestPhotos error: %v", err)
 	}
 
-	assertStepAssetCount(t, studyRoot, sessionSlug, "first-exposure", 1)
-	assertStepAssetCount(t, studyRoot, sessionSlug, "ground", 4)
-	assertStepAssetCount(t, studyRoot, sessionSlug, "second-exposure", 2)
+	assertStepAssetCount(t, studyRoot, sessionSlug, "01-first-exposure", 1)
+	assertStepAssetCount(t, studyRoot, sessionSlug, "02-ground", 4)
+	assertStepAssetCount(t, studyRoot, sessionSlug, "03-second-exposure", 2)
 	assertAssetCount(t, studyRoot, sessionSlug, 7)
 }
 
 func TestCmdIngestPhotos_ParsesExifOncePerSourceAcrossSessions(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
 	mustCopyDir(
 		t,
 		filepath.Join(studyRoot, "session", "18-02-2026-boehmer"),
@@ -346,7 +346,7 @@ func TestCmdIngestPhotos_DefaultMode_UsesConfiguredPhotosLibraryPath(t *testing.
 
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
 	sessionA := "18-02-2026-boehmer"
 
 	photosDir := filepath.Join(tmp, "photos-library-feed")
@@ -471,7 +471,7 @@ func TestCmdIngestPhotos_DefaultMode_UsesSQLiteAssetDiscoveryWhenDatabaseExists(
 
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
 	sessionA := "18-02-2026-boehmer"
 
 	libraryRoot := filepath.Join(tmp, "Photos Library.photoslibrary")

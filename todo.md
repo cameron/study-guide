@@ -1,0 +1,4 @@
+- standardize selection style (row bg)
+- possible w/o breaking the table cursor? this was a big issue
+- test for subject requireemnts being read and absorbed
+- remove "activate" text from active column unless cursor is focused there

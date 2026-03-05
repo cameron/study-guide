@@ -60,7 +60,7 @@ Out of scope for v1:
 Notes:
 - v1 has exactly one protocol: `<study-root>/protocol.sg.md`
 - sessions are not nested under protocol
-- `test-data/study-eg/` is the canonical sample tree name (not `sample-eg/`)
+- `fixtures/study-eg/` is the canonical sample tree name (not `sample-eg/`)
 
 ## Naming, IDs, and Time Format
 
@@ -121,7 +121,8 @@ Required markdown sections:
 `# Steps` contract:
 - each step is an H2 heading under `# Steps`
 - heading text is step display name
-- step slug is kebab-case transform of heading unless explicitly overridden later (future extension)
+- step slug is an ordered prefix plus normalized heading: `<NN>-<kebab-step-name>` where `NN` is 1-based, zero-padded to at least two digits (`01`, `02`, ...)
+- optional step description is free-form markdown directly below the step heading until the next H2 (or next H1 section)
 
 Optional markdown sections:
 - `# Actions`
@@ -165,10 +166,16 @@ Optional markdown body:
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
 `sg session advance`, `sg ingest-photos`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
 
+### `sg` (no args)
+DWIM entrypoint behavior:
+- if run inside a study root (or nested path), launch `sg sessions`
+- if run in a directory missing `study.sg.md`, run `sg init` and then launch `sg sessions`
+- otherwise, print help text
+
 ### `sg init`
 Interactive prompt:
 - asks for study name
-- asks for protocol outline as brief step titles (zero or more)
+- asks for protocol outline as brief step definitions, one step per line (`<step name> | <optional description>`)
 
 Creates:
 - `study.sg.md`
@@ -184,7 +191,7 @@ Creates:
 
 `protocol.sg.md` scaffold rules:
 - create `# Steps` from protocol outline collected during init
-- each outline entry becomes one H2 step heading in the entered order
+- each outline entry becomes one H2 step heading in the entered order; when description is provided, write it directly below that H2
 - if no outline is provided, create one placeholder step `## First Step`
 
 ### `sg subject create`
@@ -212,7 +219,7 @@ Delete one subject file from global subject store.
 ### `sg session`
 Interactive session flow:
 1. Select subject(s) from global store using the same `Create Session` picker UI used by `sg sessions` create mode.
-   That shared picker includes `Create new subject` and `Create` actions.
+   That shared picker includes `(+) New subject` and `-> Create Session` actions.
 2. Create `session/<session-slug>/session.sg.md`.
 3. Parse `protocol.sg.md` steps.
 4. On step start: create step folder + `step.sg.md` and write `time_started`.
@@ -263,12 +270,14 @@ Behavior:
    The selected-row tint should include a slight blue hue with exact adaptive colors: light `#d9dcef`, dark `#262b3a`.
 21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
 22. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `Create new subject` action above `Create`.
+23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above `-> Create Session`.
 23. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
 24. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
 25. Create-mode list item labels are uniformly indented with exactly two leading spaces.
 26. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
 27. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
+28. `p` triggers publish from browse view (keyboard action; not a table row). When there is at least one finished session and zero in-progress sessions, browse footer also includes a bright hint: `p publish with <X> sessions` where `X` is the finished-session count.
+29. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
@@ -370,18 +379,20 @@ This is optional and should not block CLI implementation.
 All criteria below are pass/fail requirements for v1.
 
 ### A. Scaffold and Layout
-1. Running `sg init` in an empty directory creates:
+1. Running `sg` with no args in a directory missing `study.sg.md` runs init flow and then opens `sg sessions`.
+2. Running `sg` with no args from a study root (or nested path) opens `sg sessions`.
+3. Running `sg init` in an empty directory creates:
 - `study.sg.md`
 - `protocol.sg.md`
 - `subject-requirements.yaml`
 - `session/`
-2. Re-running `sg init` does not destroy existing data files.
-3. The generated scaffold matches the canonical layout defined in this spec.
-4. `sg init` is interactive and requires a study name.
-5. `study.sg.md` frontmatter includes `created_on` and does not include `name` or `updated_on`.
-6. The first H1 in `study.sg.md` equals the study name entered during `sg init`.
-7. `sg init` accepts a protocol outline and writes each outline item as an H2 step under `# Steps` in `protocol.sg.md`.
-8. If protocol outline is left blank, `protocol.sg.md` includes a placeholder `## First Step`.
+4. Re-running `sg init` does not destroy existing data files.
+5. The generated scaffold matches the canonical layout defined in this spec.
+6. `sg init` is interactive and requires a study name.
+7. `study.sg.md` frontmatter includes `created_on` and does not include `name` or `updated_on`.
+8. The first H1 in `study.sg.md` equals the study name entered during `sg init`.
+9. `sg init` accepts a protocol outline with one step per line (`<step name> | <optional description>`) and writes each outline item as an H2 step under `# Steps` in `protocol.sg.md`.
+10. If protocol outline is left blank, `protocol.sg.md` includes a placeholder `## First Step`.
 
 ### B. Subject Store and Subject Commands
 1. `sg subject create` writes a `.sg.md` file under `~/.study-guide/subject/`.
@@ -397,8 +408,9 @@ All criteria below are pass/fail requirements for v1.
 ### C. Protocol Parsing
 1. `protocol.sg.md` is accepted only when `# Protocol Summary` and `# Steps` exist.
 2. Step definitions are parsed from H2 headings under `# Steps`.
-3. Step slugs are kebab-case transforms of step headings.
-4. Step order in parsed output matches source order in `protocol.sg.md`.
+3. Step slugs are `<NN>-<kebab-step-name>` using protocol order (`NN` is zero-padded 1-based index).
+4. Optional step descriptions are parsed from markdown content directly under each H2 step heading.
+5. Step order in parsed output matches source order in `protocol.sg.md`.
 
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
@@ -419,6 +431,7 @@ All criteria below are pass/fail requirements for v1.
 17. In `sg sessions`, arming an action updates that same session row inline with `<X>/<Y>` progress and `enter to ...?` copy (no floating confirmation block below the list).
 18. `sg sessions` shows `esc to cancel` helper text in subtle/grey style while an action is armed.
 19. `sg sessions` progress numerator `X` in `[X/Y]` reflects progressed steps, not only active-step index; when no step is currently active but later protocol steps remain, `X` equals the number of completed steps.
+20. In `sg sessions`, pressing `p` triggers publish from browse view. Footer hint text (`p publish with <X> sessions`) is shown only when `finished_sessions > 0` and `in_progress_sessions == 0`.
 
 ### E. Photo Ingestion
 1. `sg ingest-photos` is non-interactive and runs against all sessions in the study.
@@ -444,6 +457,7 @@ All criteria below are pass/fail requirements for v1.
 10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
 11. Output includes per-session ingest counts and aggregate totals.
 12. `sg ingest-photos --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
+    The canonical fixture directory for that asset set is `fixtures/study-complete-assets/`.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
@@ -490,7 +504,8 @@ All criteria below are pass/fail requirements for v1.
 - status issue detection for missing required fields/sections
 - ingest photo window matching and boundary behavior
 - ingest duplicate/idempotency behavior
-- ingest command behavior using `--assets-dir` fixtures against `test-data/study-eg`
+- ingest command behavior using `--assets-dir` fixtures against `fixtures/study-eg`
 3. `go test ./...` passes in a clean checkout.
 4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.
 5. TUI behavior tests should prefer stable contract and snapshot-style assertions (rendered text states and key layout invariants) over many micro-assertions of individual style properties.
+6. Tests should not rely on mutable repository fixture state (for example pre-populated asset counts in `fixtures/`); setup should generate required runtime state within the test (for example by running `sg ingest-photos` in a temp study).

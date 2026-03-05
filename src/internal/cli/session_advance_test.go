@@ -314,6 +314,31 @@ func TestLoadSessionRecords_DerivesSubjectNamesFromSubjectsSection(t *testing.T)
 	}
 }
 
+func TestAdvanceSessionOnce_RejectsNonContiguousProgress(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocolThreeSteps()
+	slug := "01-01-2026-noncontiguous"
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	// first-step and third-step started while second-step is missing.
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started":  "10:01:00 01-01-2026",
+		"time_finished": "10:02:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "third-step", "step.sg.md"), map[string]any{
+		"time_started": "10:03:00 01-01-2026",
+	}, "")
+
+	_, err := advanceSessionOnce(root, slug, protocol)
+	if err == nil {
+		t.Fatalf("expected error for non-contiguous progress")
+	}
+	if !strings.Contains(err.Error(), "non-contiguous") {
+		t.Fatalf("expected non-contiguous error, got: %v", err)
+	}
+}
+
 func mustWriteSessionFile(t *testing.T, root, slug string, fm map[string]any) {
 	t.Helper()
 	path := filepath.Join(root, "session", slug, "session.sg.md")

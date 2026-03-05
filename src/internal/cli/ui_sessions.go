@@ -53,8 +53,11 @@ type sessionsSwitchboardModel struct {
 	createLookup      map[string]string
 	actionCursor      sessionActionCursor
 	activeSessionSlug string
+	finishedSessionCount   int
+	inProgressSessionCount int
 	subjects          []store.Subject
 	selectedBySubject map[string]bool
+	publishFunc       func(string) error
 
 	message string
 	err     error
@@ -62,6 +65,7 @@ type sessionsSwitchboardModel struct {
 }
 
 var subtleTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+var brightHintStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
 var focusedTokenPattern = regexp.MustCompile(`\{[^{}\n]+\}`)
 var actionCellTokenPattern = regexp.MustCompile("\x1e([^\x1e\x1f\n]*)\x1f")
 const actionCellANSIPrefix = "\x1b[38;5;252;48;5;238m"
@@ -71,7 +75,8 @@ const focusedTokenANSISuffix = "\x1b[0m"
 
 const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
 const sessionsCreateItemIndent = "  "
-const sessionsCreateActionCreateSubject = "Create new subject"
+const sessionsCreateActionCreateSubject = "(+) New subject"
+const sessionsCreateActionCreateSession = "-> Create Session"
 
 type sessionActionCursor string
 
@@ -221,6 +226,19 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == sessionsViewCreate {
 				return m.handleCreateEnter()
 			}
+		case "p":
+			if m.view == sessionsViewBrowse {
+				if err := m.publishStudy(); err != nil {
+					m.message = "publish failed: " + err.Error()
+					return m, nil
+				}
+				if m.canPublishFromBrowse() {
+					m.message = fmt.Sprintf("published with %d sessions", m.finishedSessionCount)
+				} else {
+					m.message = "published"
+				}
+				return m, nil
+			}
 		case "left", "h":
 			if m.view == sessionsViewBrowse {
 				m.moveActionCursorLeft()
@@ -296,7 +314,11 @@ func (m sessionsSwitchboardModel) View() string {
 		b.WriteString(subtleTextStyle.Render(m.message))
 	}
 	b.WriteString("\n")
-	b.WriteString(subtleTextStyle.Render("ctrl+n to create new; esc to quit"))
+	footer := subtleTextStyle.Render("ctrl+n to create new; esc to quit")
+	if m.canPublishFromBrowse() {
+		footer += "  " + brightHintStyle.Render(fmt.Sprintf("p publish with %d sessions", m.finishedSessionCount))
+	}
+	b.WriteString(footer)
 	return b.String()
 }
 
@@ -418,6 +440,15 @@ func (m *sessionsSwitchboardModel) refreshBrowseList() error {
 	records, err := loadSessionRecords(m.root, m.protocol, subjectByID)
 	if err != nil {
 		return err
+	}
+	m.finishedSessionCount = 0
+	m.inProgressSessionCount = 0
+	for _, r := range records {
+		if r.Complete {
+			m.finishedSessionCount++
+			continue
+		}
+		m.inProgressSessionCount++
 	}
 	activeSlug, err := readActiveSessionSlug(m.root)
 	if err != nil {
@@ -632,7 +663,7 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 	createSubjectLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSubject)
 	items = append(items, listItem(createSubjectLabel))
 	m.createLookup[createSubjectLabel] = "create-subject"
-	createLabel := sessionsCreateItemLabel("Create")
+	createLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSession)
 	items = append(items, listItem(createLabel))
 	m.createLookup[createLabel] = "create"
 
@@ -662,6 +693,17 @@ func (m *sessionsSwitchboardModel) moveActionCursorRight() {
 
 func (m *sessionsSwitchboardModel) moveActionCursorLeft() {
 	m.actionCursor = sessionActionCursorActive
+}
+
+func (m sessionsSwitchboardModel) canPublishFromBrowse() bool {
+	return m.finishedSessionCount > 0 && m.inProgressSessionCount == 0
+}
+
+func (m sessionsSwitchboardModel) publishStudy() error {
+	if m.publishFunc != nil {
+		return m.publishFunc(m.root)
+	}
+	return cmdPublishAtRoot(m.root)
 }
 
 func readActiveSessionSlug(root string) (string, error) {

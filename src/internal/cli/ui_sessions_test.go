@@ -524,7 +524,8 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 		"Create Session",
 		"  " + sessionsCreateInfoText,
 		"  [ ] Alpha Subject (abc12345)",
-		"  Create new subject",
+		"  (+) New subject",
+		"  -> Create Session",
 	}
 	last := -1
 	for _, token := range expectedInOrder {
@@ -547,10 +548,10 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 		if trimmed == "[ ] Alpha Subject (abc12345)" {
 			subjectLine = i
 		}
-		if trimmed == "Create new subject" && strings.HasPrefix(line, "  ") {
+		if trimmed == "(+) New subject" && strings.HasPrefix(line, "  ") {
 			createSubjectLine = i
 		}
-		if trimmed == "Create" && strings.HasPrefix(line, "  ") {
+		if trimmed == "-> Create Session" && strings.HasPrefix(line, "  ") {
 			createLine = i
 		}
 	}
@@ -597,7 +598,8 @@ func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 		"Create Session",
 		"  " + sessionsCreateInfoText,
 		"  [ ] Alpha Subject (abc12345)",
-		"  Create new subject",
+		"  (+) New subject",
+		"  -> Create Session",
 	}
 	lastSwitchboard := -1
 	lastPicker := -1
@@ -619,6 +621,62 @@ func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 			t.Fatalf("picker token order mismatch around %q\noutput:\n%s", token, pickerView)
 		}
 		lastPicker = idxPicker
+	}
+}
+
+func TestSessionsUI_ViewShowsPublishHintWhenEligible(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:               sessionsViewBrowse,
+		filter:             newSessionsFilterInput(),
+		table:              table.New(),
+		finishedSessionCount:   2,
+		inProgressSessionCount: 0,
+	}
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "p publish with 2 sessions") {
+		t.Fatalf("expected publish hint in browse footer, got:\n%s", out)
+	}
+}
+
+func TestSessionsUI_ViewHidesPublishHintWhenIneligible(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:               sessionsViewBrowse,
+		filter:             newSessionsFilterInput(),
+		table:              table.New(),
+		finishedSessionCount:   2,
+		inProgressSessionCount: 1,
+	}
+	out := stripANSI(m.View())
+	if strings.Contains(out, "p publish with") {
+		t.Fatalf("did not expect publish hint in browse footer, got:\n%s", out)
+	}
+}
+
+func TestSessionsUI_KeyPTriggersPublishAlways(t *testing.T) {
+	publishCalls := 0
+	m := sessionsSwitchboardModel{
+		view:                   sessionsViewBrowse,
+		filter:                 newSessionsFilterInput(),
+		table:                  table.New(),
+		finishedSessionCount:   1,
+		inProgressSessionCount: 0,
+		publishFunc: func(string) error {
+			publishCalls++
+			return nil
+		},
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = updated.(sessionsSwitchboardModel)
+	if publishCalls != 1 {
+		t.Fatalf("expected publish to run once when eligible, got %d", publishCalls)
+	}
+
+	m.finishedSessionCount = 1
+	m.inProgressSessionCount = 1
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = updated.(sessionsSwitchboardModel)
+	if publishCalls != 2 {
+		t.Fatalf("expected publish to run even when hint is hidden, got %d calls", publishCalls)
 	}
 }
 
