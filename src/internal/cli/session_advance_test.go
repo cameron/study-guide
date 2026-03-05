@@ -131,7 +131,7 @@ func TestInferSessionSlugFromCwd(t *testing.T) {
 	}
 }
 
-func TestCmdCurrentSessionAdvance_InfersSessionFromDirectory(t *testing.T) {
+func TestCmdSessionAdvance_InfersSessionFromDirectory(t *testing.T) {
 	root := t.TempDir()
 	slug := "01-01-2026-epsilon"
 	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
@@ -150,8 +150,8 @@ func TestCmdCurrentSessionAdvance_InfersSessionFromDirectory(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldwd) }()
 
-	if err := cmdCurrentSessionAdvance(nil); err != nil {
-		t.Fatalf("cmdCurrentSessionAdvance returned error: %v", err)
+	if err := cmdSession([]string{"advance"}); err != nil {
+		t.Fatalf("cmdSession advance returned error: %v", err)
 	}
 }
 

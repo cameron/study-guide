@@ -33,11 +33,9 @@ func Run(args []string) int {
 	case "subject":
 		err = cmdSubject(args[1:])
 	case "session":
-		err = cmdSession()
+		err = cmdSession(args[1:])
 	case "sessions":
 		err = cmdSessions()
-	case "current-session":
-		err = cmdCurrentSession(args[1:])
 	case "status":
 		err = cmdStatus(true)
 	case "publish":
@@ -65,9 +63,8 @@ func printHelp() {
 Commands:
   init
   subject create|edit|search|print|ls|rm
-  session
+  session [advance [--session <slug>]]
   sessions
-  current-session advance [--session <slug>]
   status
   publish
   ingest-photos`)
@@ -316,7 +313,16 @@ func subjectEdit(q string) error {
 	return nil
 }
 
-func cmdSession() error {
+func cmdSession(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "advance":
+			return cmdSessionAdvance(args[1:])
+		default:
+			return fmt.Errorf("unknown session subcommand: %s", args[0])
+		}
+	}
+
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
 		return err
@@ -396,19 +402,7 @@ func cmdSessions() error {
 	return runSessionsSwitchboard(root, protocol)
 }
 
-func cmdCurrentSession(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: sg current-session advance [--session <slug>]")
-	}
-	switch args[0] {
-	case "advance":
-		return cmdCurrentSessionAdvance(args[1:])
-	default:
-		return fmt.Errorf("unknown current-session subcommand: %s", args[0])
-	}
-}
-
-func cmdCurrentSessionAdvance(args []string) error {
+func cmdSessionAdvance(args []string) error {
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
 		return err
@@ -848,53 +842,14 @@ func uniqueSessionSlug(root, baseSlug string) string {
 }
 
 func selectSubjectsForSession() ([]store.Subject, error) {
-	selected := []store.Subject{}
-	selectedByUUID := map[string]bool{}
-
-	for {
-		subs, err := store.ListSubjects()
-		if err != nil {
-			return nil, err
-		}
-		items := make([]string, 0, len(subs)+2)
-		lookup := map[string]store.Subject{}
-		for _, s := range subs {
-			label := fmt.Sprintf("%s (%s)", s.Name, strings.Split(s.UUID, "-")[0])
-			if selectedByUUID[s.UUID] {
-				label = "[selected] " + label
-			}
-			items = append(items, label)
-			lookup[label] = s
-		}
-		items = append(items, "Create new subject")
-		items = append(items, "Done selecting")
-		choice, canceled, err := runSelect("Select subject(s)", items)
-		if err != nil {
-			return nil, err
-		}
-		if canceled {
-			return nil, errors.New("session canceled")
-		}
-		switch choice {
-		case "Create new subject":
-			if err := subjectCreate(); err != nil {
-				return nil, err
-			}
-			continue
-		case "Done selecting":
-			if len(selected) == 0 {
-				fmt.Println("select at least one subject")
-				continue
-			}
-			return selected, nil
-		default:
-			s := lookup[choice]
-			if !selectedByUUID[s.UUID] {
-				selectedByUUID[s.UUID] = true
-				selected = append(selected, s)
-			}
-		}
+	selected, canceled, err := runSessionCreatePicker()
+	if err != nil {
+		return nil, err
 	}
+	if canceled {
+		return nil, errors.New("session canceled")
+	}
+	return selected, nil
 }
 
 func cmdStatus(render bool) error {

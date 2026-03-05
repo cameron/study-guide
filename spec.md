@@ -60,7 +60,7 @@ Out of scope for v1:
 Notes:
 - v1 has exactly one protocol: `<study-root>/protocol.sg.md`
 - sessions are not nested under protocol
-- `study-eg/` is the canonical sample tree name (not `sample-eg/`)
+- `test-data/study-eg/` is the canonical sample tree name (not `sample-eg/`)
 
 ## Naming, IDs, and Time Format
 
@@ -160,7 +160,7 @@ Optional markdown body:
 
 `sg` is the executable.
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
-`sg current-session advance`, `sg ingest-photos`, `sg status`, and `sg publish` are non-interactive.
+`sg session advance`, `sg ingest-photos`, `sg status`, and `sg publish` are non-interactive.
 
 ### `sg init`
 Interactive prompt:
@@ -208,7 +208,8 @@ Delete one subject file from global subject store.
 
 ### `sg session`
 Interactive session flow:
-1. Select subject(s) from global store (or create a new subject).
+1. Select subject(s) from global store using the same `Create Session` picker UI used by `sg sessions` create mode.
+   That shared picker includes `Create new subject` and `Create` actions.
 2. Create `session/<session-slug>/session.sg.md`.
 3. Parse `protocol.sg.md` steps.
 4. On step start: create step folder + `step.sg.md` and write `time_started`.
@@ -259,6 +260,7 @@ Behavior:
    The selected-row tint should include a slight blue hue with exact adaptive colors: light `#d9dcef`, dark `#262b3a`.
 21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
 22. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `Create new subject` action above `Create`.
 23. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
 24. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
 25. Create-mode list item labels are uniformly indented with exactly two leading spaces.
@@ -268,7 +270,7 @@ Behavior:
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
 
-### `sg current-session advance`
+### `sg session advance`
 Non-interactive "advance once" command for scriptable/session-directory usage.
 
 Behavior:
@@ -399,8 +401,8 @@ All criteria below are pass/fail requirements for v1.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
 11. In `sg sessions`, `Enter` executes the currently focused action cell: `ACTIVE` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
-13. `sg current-session advance` works from within a session directory without requiring `cd` to other sessions.
-14. `sg current-session advance --session <slug>` advances a specific session from study root (or any path within the study).
+13. `sg session advance` works from within a session directory without requiring `cd` to other sessions.
+14. `sg session advance --session <slug>` advances a specific session from study root (or any path within the study).
 15. `sg sessions` uses one list view for arm-and-confirm (no separate confirm screen and no `Back` option); `Esc` cancels armed actions.
 16. `sg sessions` view hides list control/help context and shows `current step: ...` status text instead of generic item-count status text.
 17. In `sg sessions`, arming an action updates that same session row inline with `<X>/<Y>` progress and `enter to ...?` copy (no floating confirmation block below the list).
@@ -464,7 +466,7 @@ All criteria below are pass/fail requirements for v1.
 - status issue detection for missing required fields/sections
 - ingest photo window matching and boundary behavior
 - ingest duplicate/idempotency behavior
-- ingest command behavior using `--assets-dir` fixtures against `study-eg`
+- ingest command behavior using `--assets-dir` fixtures against `test-data/study-eg`
 3. `go test ./...` passes in a clean checkout.
 4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.
 5. TUI behavior tests should prefer stable contract and snapshot-style assertions (rendered text states and key layout invariants) over many micro-assertions of individual style properties.

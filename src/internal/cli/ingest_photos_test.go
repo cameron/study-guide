@@ -162,7 +162,7 @@ func TestCollectSessionAssetHashes_DedupesByContent(t *testing.T) {
 func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
-	mustCopyDir(t, filepath.Join("..", "..", "..", "study-eg"), studyRoot)
+	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
 
 	sessionA := "18-02-2026-boehmer"
 

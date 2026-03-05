@@ -71,6 +71,7 @@ const focusedTokenANSISuffix = "\x1b[0m"
 
 const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
 const sessionsCreateItemIndent = "  "
+const sessionsCreateActionCreateSubject = "Create new subject"
 
 type sessionActionCursor string
 
@@ -379,6 +380,20 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 		}
 		m.message = "session created: " + slug
 		return m, nil
+	case "create-subject":
+		if err := subjectCreate(); err != nil {
+			m.message = "create subject failed: " + err.Error()
+			return m, nil
+		}
+		subs, err := store.ListSubjects()
+		if err != nil {
+			m.message = "refresh subjects failed: " + err.Error()
+			return m, nil
+		}
+		m.subjects = subs
+		m.refreshCreateList()
+		m.message = ""
+		return m, nil
 	case "":
 		return m, nil
 	default:
@@ -614,6 +629,9 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 			m.createLookup[label] = "subject:" + s.UUID
 		}
 	}
+	createSubjectLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSubject)
+	items = append(items, listItem(createSubjectLabel))
+	m.createLookup[createSubjectLabel] = "create-subject"
 	createLabel := sessionsCreateItemLabel("Create")
 	items = append(items, listItem(createLabel))
 	m.createLookup[createLabel] = "create"

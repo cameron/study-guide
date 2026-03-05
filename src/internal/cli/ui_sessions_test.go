@@ -524,6 +524,7 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 		"Create Session",
 		"  " + sessionsCreateInfoText,
 		"  [ ] Alpha Subject (abc12345)",
+		"  Create new subject",
 	}
 	last := -1
 	for _, token := range expectedInOrder {
@@ -539,21 +540,28 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 
 	lines := strings.Split(out, "\n")
 	subjectLine := -1
+	createSubjectLine := -1
 	createLine := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "[ ] Alpha Subject (abc12345)" {
 			subjectLine = i
 		}
+		if trimmed == "Create new subject" && strings.HasPrefix(line, "  ") {
+			createSubjectLine = i
+		}
 		if trimmed == "Create" && strings.HasPrefix(line, "  ") {
 			createLine = i
 		}
 	}
-	if subjectLine < 0 || createLine < 0 {
-		t.Fatalf("expected subject and create action lines in snapshot\noutput:\n%s", out)
+	if subjectLine < 0 || createSubjectLine < 0 || createLine < 0 {
+		t.Fatalf("expected subject, create-subject, and create action lines in snapshot\noutput:\n%s", out)
 	}
-	if createLine <= subjectLine {
-		t.Fatalf("expected Create action below subject line, got subject=%d create=%d", subjectLine, createLine)
+	if createSubjectLine <= subjectLine {
+		t.Fatalf("expected Create new subject below subject line, got subject=%d create-subject=%d", subjectLine, createSubjectLine)
+	}
+	if createLine <= createSubjectLine {
+		t.Fatalf("expected Create action below Create new subject line, got create-subject=%d create=%d", createSubjectLine, createLine)
 	}
 }
 
@@ -568,6 +576,49 @@ func TestSessionsUI_CreateDelegateNoHorizontalShift(t *testing.T) {
 			d.Styles.SelectedTitle.GetPaddingLeft(),
 			d.Styles.NormalTitle.GetPaddingLeft(),
 		)
+	}
+}
+
+func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
+	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
+	selected := map[string]bool{}
+
+	m := sessionsSwitchboardModel{
+		subjects:          subjects,
+		selectedBySubject: selected,
+	}
+	m.refreshCreateList()
+	switchboardView := stripANSI(m.View())
+
+	picker := newSessionCreatePickerModel(subjects, selected)
+	pickerView := stripANSI(picker.View())
+
+	expectedInOrder := []string{
+		"Create Session",
+		"  " + sessionsCreateInfoText,
+		"  [ ] Alpha Subject (abc12345)",
+		"  Create new subject",
+	}
+	lastSwitchboard := -1
+	lastPicker := -1
+	for _, token := range expectedInOrder {
+		idxSwitchboard := strings.Index(switchboardView, token)
+		if idxSwitchboard < 0 {
+			t.Fatalf("switchboard view missing token: %q\noutput:\n%s", token, switchboardView)
+		}
+		if idxSwitchboard <= lastSwitchboard {
+			t.Fatalf("switchboard token order mismatch around %q\noutput:\n%s", token, switchboardView)
+		}
+		lastSwitchboard = idxSwitchboard
+
+		idxPicker := strings.Index(pickerView, token)
+		if idxPicker < 0 {
+			t.Fatalf("picker view missing token: %q\noutput:\n%s", token, pickerView)
+		}
+		if idxPicker <= lastPicker {
+			t.Fatalf("picker token order mismatch around %q\noutput:\n%s", token, pickerView)
+		}
+		lastPicker = idxPicker
 	}
 }
 
