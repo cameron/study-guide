@@ -135,23 +135,26 @@ Optional keys specify required fields for subject creation flow:
 
 ## `<study-root>/session/<slug>/session.sg.md`
 Required frontmatter:
-- `time_started`
-- `subject_ids` (array of subject UUIDs, minimum length 1)
+- none
 
 Optional frontmatter:
-- `time_finished`
 - `notes`
 
 Optional markdown sections:
 - `# Subjects`
 - `# Notes`
+Rule: `# Subjects` section is authoritative for session subjects; each non-empty line under `# Subjects` is one subject entry.
 
 ## `<study-root>/session/<slug>/step/<step-slug>/step.sg.md`
 Required frontmatter:
 - `time_started`
 
-Required at session completion:
+Required for final protocol step at session completion:
 - `time_finished`
+
+Optional for non-final protocol steps:
+- `time_finished`
+  - if omitted, implied value is `next_step.time_started - 1 second`
 
 Optional markdown body:
 - free-form notes
@@ -214,7 +217,7 @@ Interactive session flow:
 3. Parse `protocol.sg.md` steps.
 4. On step start: create step folder + `step.sg.md` and write `time_started`.
 5. On step advance: write previous step `time_finished`, then start next step.
-6. On finish: write current step `time_finished` and `session.sg.md time_finished`.
+6. On finish: write current step `time_finished`.
 
 Rule: session command is authoritative for step timing. Step timestamps are never derived from photos.
 Note: for session progression, a step may be treated as effectively finished when a later protocol step has `time_started`, even if the earlier step has no explicit `time_finished`.
@@ -261,7 +264,7 @@ Behavior:
 21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
 22. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
 23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `Create new subject` action above `Create`.
-23. A session with `session.sg.md time_finished` but missing required protocol step progress is treated as incomplete/invalid and remains listed.
+23. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
 24. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
 25. Create-mode list item labels are uniformly indented with exactly two leading spaces.
 26. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
@@ -286,7 +289,7 @@ Behavior:
 Purpose: copy photo assets into matching step `asset/` folders by capture time.
 
 Input source:
-- default: direct Apple Photos album export on macOS
+- default: direct filesystem scan of original assets in the Photos Library on macOS (no AppleScript export step)
 - optional: `--assets-dir <path>` recursively reads image files from a local directory (used for tests/dev; also valid on non-macOS)
 
 Session targeting:
@@ -299,7 +302,7 @@ Timestamp source precedence:
 2. skip asset with warning if EXIF missing
 
 Step windows:
-- non-last step: `[step.time_started, next_step.time_started)`
+- non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
 
 Rules:
@@ -314,7 +317,8 @@ Reports missing/invalid data that affects publication:
 - missing expected study sections (`Hypotheses`, `Discussion`, `Conclusion`)
 - missing required frontmatter fields
 - sessions with missing step files for protocol steps
-- steps missing `time_started`/`time_finished`
+- steps missing `time_started`
+- final protocol steps missing `time_finished`
 
 Outputs:
 - issue list
@@ -389,15 +393,12 @@ All criteria below are pass/fail requirements for v1.
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
 2. Session slug follows `<DD-MM-YYYY>-<subject-surname[-surname...]>`.
-3. Session file contains required fields: `time_started`, `subject_ids`.
+3. Session subjects are derived from the `# Subjects` section lines in `session.sg.md` (one subject per line).
 4. Starting each step creates `step/<step-slug>/step.sg.md` with `time_started`.
 5. Advancing from one step to the next writes `time_finished` to the previous step.
-6. Finishing a session writes:
-- `time_finished` on the active/final step
-- `time_finished` in `session.sg.md`
+6. Finishing a session writes `time_finished` on the active/final step.
 7. Step times are written by `sg session` and never inferred from ingested media.
-8. All timestamps in session and step files use `HH:MM:SS DD-MM-YYYY`.
-9. `session.sg.md` frontmatter key order writes `time_started` before `time_finished` when both exist.
+8. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
 11. In `sg sessions`, `Enter` executes the currently focused action cell: `ACTIVE` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
@@ -415,14 +416,20 @@ All criteria below are pass/fail requirements for v1.
 - default mode reads assets from Apple Photos on macOS.
 - `--assets-dir <path>` mode reads image files recursively from local filesystem (supported on all OSes).
 3. `--assets-dir` is optional.
-4. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
-5. Time-window matching rule is enforced:
-- non-last step: `[step.time_started, next_step.time_started)`
+4. Default mode scans expected Photos Library package subdirectories on disk and fails loudly with the checked paths when none are found.
+   The default source path is configurable via `~/.study-guide/config` key `photos_library_path`.
+   If configured path points at `Photos Library.photoslibrary` package root, ingestion resolves to `originals/` (or `Masters/` fallback) and does not scan derivative/preview subtrees.
+   Even when a broad source root is used, files under `derivatives/` and `previews/` are excluded from candidate scanning.
+   Unrecognized keys in `~/.study-guide/config` are ignored but emitted as warnings.
+5. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
+6. In default mode, candidate files are pre-filtered by filesystem `mtime` against the global session step-window envelope before EXIF reads, so ingest does not traverse the entire library as EXIF candidates.
+6. Time-window matching rule is enforced:
+- non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
-6. Assets are copied to the correct `step/<step-slug>/asset/` directory.
-7. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
-8. Duplicate files are skipped based on content identity within each session.
-9. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
+7. Assets are copied to the correct `step/<step-slug>/asset/` directory.
+8. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
+9. Duplicate files are skipped based on content identity within each session.
+10. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
 10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
 11. Output includes per-session ingest counts and aggregate totals.
 
@@ -430,7 +437,7 @@ All criteria below are pass/fail requirements for v1.
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
 2. `sg status` reports missing study markdown sections: `Hypotheses`, `Discussion`, `Conclusion`.
 3. `sg status` reports sessions missing required step instances from protocol definition.
-4. `sg status` reports steps missing `time_started` or `time_finished`.
+4. `sg status` reports steps missing `time_started`, and reports missing `time_finished` only for final protocol steps.
 5. `sg status` outputs:
 - a human-readable issue list
 - an overall completeness result

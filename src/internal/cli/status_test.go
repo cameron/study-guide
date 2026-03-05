@@ -14,6 +14,9 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step")); err != nil {
 		t.Fatalf("mkdir failed: %v", err)
 	}
+	if err := util.EnsureDir(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "second-step")); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "study.sg.md"), map[string]any{
 		"status": "WIP",
 	}, "# Example Study\n\n# Hypotheses\n"); err != nil {
@@ -23,13 +26,17 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "protocol.sg.md"), []byte(protocol), 0o644); err != nil {
 		t.Fatalf("write protocol failed: %v", err)
 	}
-	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "session.sg.md"), map[string]any{
-		"time_started": "10:00:00 01-01-2026",
-		"subject_ids":  []string{},
-	}, ""); err != nil {
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "session.sg.md"), map[string]any{}, ""); err != nil {
 		t.Fatalf("write session failed: %v", err)
 	}
-	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step", "step.sg.md"), map[string]any{}, ""); err != nil {
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:00:00 01-01-2026",
+	}, ""); err != nil {
+		t.Fatalf("write step failed: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "step", "second-step", "step.sg.md"), map[string]any{
+		"time_started": "10:05:00 01-01-2026",
+	}, ""); err != nil {
 		t.Fatalf("write step failed: %v", err)
 	}
 
@@ -42,10 +49,8 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 		"study.sg.md missing required field: created_on",
 		"study.sg.md missing section: # Discussion",
 		"study.sg.md missing section: # Conclusion",
-		"session missing required field subject_ids: 01-01-2026-boehmer",
-		"step missing time_started: ",
+		"session missing subjects in # Subjects section: 01-01-2026-boehmer",
 		"step missing time_finished: ",
-		"session missing step file for protocol step second-step: 01-01-2026-boehmer",
 	}
 	for _, want := range mustContain {
 		found := false
@@ -57,6 +62,14 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("missing expected issue containing %q\nissues=%v", want, issues)
+		}
+	}
+	for _, issue := range issues {
+		if strings.Contains(issue, "session missing required field time_started") {
+			t.Fatalf("did not expect session time_started status issue; issues=%v", issues)
+		}
+		if strings.Contains(issue, "step missing time_finished:") && strings.Contains(issue, "first-step") {
+			t.Fatalf("did not expect non-final step missing time_finished issue; issues=%v", issues)
 		}
 	}
 }

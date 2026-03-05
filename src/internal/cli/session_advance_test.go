@@ -15,8 +15,7 @@ func TestAdvanceSessionOnce_StartsFirstStep(t *testing.T) {
 	protocol := testProtocol()
 	slug := "01-01-2026-alpha"
 	mustWriteSessionFile(t, root, slug, map[string]any{
-		"time_started": "10:00:00 01-01-2026",
-		"subject_ids":  []string{"sub-1"},
+		"subject_ids": []string{"sub-1"},
 	})
 
 	res, err := advanceSessionOnce(root, slug, protocol)
@@ -80,8 +79,7 @@ func TestAdvanceSessionOnce_FinishesSessionAtFinalStep(t *testing.T) {
 	protocol := testProtocol()
 	slug := "01-01-2026-gamma"
 	mustWriteSessionFile(t, root, slug, map[string]any{
-		"time_started": "10:00:00 01-01-2026",
-		"subject_ids":  []string{"sub-1"},
+		"subject_ids": []string{"sub-1"},
 	})
 	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
 		"time_started":  "10:01:00 01-01-2026",
@@ -110,8 +108,8 @@ func TestAdvanceSessionOnce_FinishesSessionAtFinalStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read session failed: %v", err)
 	}
-	if asString(sessionFM["time_finished"]) == "" {
-		t.Fatalf("expected session time_finished")
+	if strings.TrimSpace(asString(sessionFM["time_started"])) != "" || strings.TrimSpace(asString(sessionFM["time_finished"])) != "" {
+		t.Fatalf("expected session timing fields to be omitted; got time_started=%q time_finished=%q", asString(sessionFM["time_started"]), asString(sessionFM["time_finished"]))
 	}
 }
 
@@ -188,7 +186,7 @@ func TestLoadSessionRecords_ToleratesImplicitStepCompletion(t *testing.T) {
 	}
 }
 
-func TestLoadSessionRecords_FinishedFlagWithMissingStepsIsIncomplete(t *testing.T) {
+func TestLoadSessionRecords_IgnoresSessionFinishedFlagAndUsesStepProgress(t *testing.T) {
 	root := t.TempDir()
 	protocol := testProtocol()
 	slug := "01-01-2026-eta"
@@ -211,11 +209,11 @@ func TestLoadSessionRecords_FinishedFlagWithMissingStepsIsIncomplete(t *testing.
 	if records[0].Complete {
 		t.Fatalf("expected session to be incomplete")
 	}
-	if records[0].NextAction != "invalid" {
-		t.Fatalf("expected invalid next action, got %q", records[0].NextAction)
+	if records[0].NextAction != "advance" {
+		t.Fatalf("expected derived next action from steps to be advance, got %q", records[0].NextAction)
 	}
-	if records[0].InvalidReason == "" {
-		t.Fatalf("expected invalid reason to be populated")
+	if records[0].InvalidReason != "" {
+		t.Fatalf("did not expect invalid reason when deriving from steps, got %q", records[0].InvalidReason)
 	}
 }
 
@@ -286,6 +284,33 @@ func TestLoadSessionRecords_ShowsLastProgressedStepWhenNoActiveStep(t *testing.T
 	_, _, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
 	if !strings.Contains(stepText, "Third Step") {
 		t.Fatalf("expected step text to include Third Step, got %q", stepText)
+	}
+}
+
+func TestLoadSessionRecords_DerivesSubjectNamesFromSubjectsSection(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocol()
+	slug := "01-01-2026-theta"
+	path := filepath.Join(root, "session", slug, "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(path)); err != nil {
+		t.Fatalf("EnsureDir failed: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(path, map[string]any{}, "# Subjects\n\n- Alpha Subject (sub-1)\nBeta Subject (sub-2)\n\n# Notes\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile failed: %v", err)
+	}
+
+	records, err := loadSessionRecords(root, protocol, map[string]store.Subject{})
+	if err != nil {
+		t.Fatalf("loadSessionRecords returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if len(records[0].SubjectNames) != 2 {
+		t.Fatalf("expected 2 derived subject names, got %#v", records[0].SubjectNames)
+	}
+	if records[0].SubjectNames[0] != "Alpha Subject" || records[0].SubjectNames[1] != "Beta Subject" {
+		t.Fatalf("unexpected derived subject names: %#v", records[0].SubjectNames)
 	}
 }
 

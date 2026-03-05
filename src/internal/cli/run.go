@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 	"github.com/rwcarlsen/goexif/exif"
+	"gopkg.in/yaml.v3"
 
 	"study-guide/src/internal/store"
 	"study-guide/src/internal/util"
@@ -342,8 +343,6 @@ func cmdSession(args []string) error {
 	if err != nil {
 		return err
 	}
-	sessionPath := filepath.Join(sessionDir, "session.sg.md")
-
 	var prevStepPath string
 	for i, step := range protocol.Steps {
 		if prevStepPath != "" {
@@ -379,9 +378,6 @@ func cmdSession(args []string) error {
 		if err := setFrontmatterField(prevStepPath, "time_finished", util.NowTimestamp()); err != nil {
 			return err
 		}
-	}
-	if err := setFrontmatterField(sessionPath, "time_finished", util.NowTimestamp()); err != nil {
-		return err
 	}
 	fmt.Println("session complete:", sessionDir)
 	return nil
@@ -512,17 +508,19 @@ func loadSessionRecords(root string, protocol store.Protocol, subjectByID map[st
 	complete := make([]sessionRecord, 0, len(slugs))
 	for _, slug := range slugs {
 		sessionPath := filepath.Join(root, "session", slug, "session.sg.md")
-		sfm, _, err := util.ReadFrontmatterFile(sessionPath)
+		_, body, err := util.ReadFrontmatterFile(sessionPath)
 		if err != nil {
 			continue
 		}
 		subjectNames := make([]string, 0)
-		for _, id := range parseSubjectIDs(sfm["subject_ids"]) {
-			if s, ok := subjectByID[id]; ok {
-				subjectNames = append(subjectNames, s.Name)
-				continue
+		for _, subj := range parseSessionSubjects(body) {
+			name := subj.Name
+			if s, ok := subjectByID[subj.ID]; ok {
+				name = s.Name
 			}
-			subjectNames = append(subjectNames, id)
+			if strings.TrimSpace(name) != "" {
+				subjectNames = append(subjectNames, name)
+			}
 		}
 		rec := sessionRecord{
 			Slug:           slug,
@@ -611,15 +609,11 @@ func inspectSessionProgress(sessionDir string, protocol store.Protocol) (session
 	if len(protocol.Steps) == 0 {
 		return sessionProgress{}, errors.New("protocol has no steps")
 	}
-	sfm, _, err := util.ReadFrontmatterFile(filepath.Join(sessionDir, "session.sg.md"))
-	if err != nil {
-		return sessionProgress{}, err
-	}
 	p := sessionProgress{
 		ActiveStepIdx:   -1,
 		FirstUnstarted:  -1,
 		ProgressSteps:   0,
-		SessionFinished: strings.TrimSpace(asString(sfm["time_finished"])) != "",
+		SessionFinished: false,
 	}
 	startedFlags := make([]bool, len(protocol.Steps))
 	finishedFlags := make([]bool, len(protocol.Steps))
@@ -679,9 +673,8 @@ func inspectSessionProgress(sessionDir string, protocol store.Protocol) (session
 		p.ProgressSteps++
 	}
 	lastIdx := len(protocol.Steps) - 1
+	p.SessionFinished = p.FirstUnstarted == -1 && p.ActiveStepIdx == -1 && p.AnyStepStarted
 	switch {
-	case p.SessionFinished && p.FirstUnstarted >= 0:
-		p.NextAction = "invalid"
 	case p.SessionFinished:
 		p.NextAction = "none"
 	case p.ActiveStepIdx >= 0 && p.ActiveStepIdx < lastIdx:
@@ -751,9 +744,6 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 				return sessionAdvanceResult{}, err
 			}
 		}
-		if err := setFrontmatterField(sessionPath, "time_finished", now); err != nil {
-			return sessionAdvanceResult{}, err
-		}
 		lastStep := protocol.Steps[len(protocol.Steps)-1]
 		return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
 	default:
@@ -802,10 +792,8 @@ func createSessionScaffold(root string, selected []store.Subject) (string, strin
 	}
 	today := time.Now().Format("02-01-2006")
 	surnames := make([]string, 0, len(selected))
-	subjectIDs := make([]string, 0, len(selected))
 	for _, s := range selected {
 		surnames = append(surnames, util.Slugify(lastToken(s.Name)))
-		subjectIDs = append(subjectIDs, s.UUID)
 	}
 	baseSlug := fmt.Sprintf("%s-%s", today, strings.Join(surnames, "-"))
 	sessionSlug := uniqueSessionSlug(root, baseSlug)
@@ -817,10 +805,7 @@ func createSessionScaffold(root string, selected []store.Subject) (string, strin
 	for _, s := range selected {
 		subjectLines = append(subjectLines, fmt.Sprintf("- %s (%s)", s.Name, s.UUID))
 	}
-	sfm := map[string]any{
-		"time_started": util.NowTimestamp(),
-		"subject_ids":  subjectIDs,
-	}
+	sfm := map[string]any{}
 	if err := util.WriteFrontmatterFile(
 		filepath.Join(sessionDir, "session.sg.md"),
 		sfm,
@@ -916,20 +901,17 @@ func collectStatusIssues(root string) ([]string, error) {
 		slug := e.Name()
 		sdir := filepath.Join(sessionRoot, slug)
 		spath := filepath.Join(sdir, "session.sg.md")
-		sfm, _, err := util.ReadFrontmatterFile(spath)
+		_, body, err := util.ReadFrontmatterFile(spath)
 		if err != nil {
 			issues = append(issues, "invalid session file: "+spath)
 			continue
 		}
-		if strings.TrimSpace(asString(sfm["time_started"])) == "" {
-			issues = append(issues, "session missing required field time_started: "+slug)
-		}
-		if !hasNonEmptySubjectIDs(sfm["subject_ids"]) {
-			issues = append(issues, "session missing required field subject_ids: "+slug)
+		if len(parseSessionSubjects(body)) == 0 {
+			issues = append(issues, "session missing subjects in # Subjects section: "+slug)
 		}
 
 		if err == nil {
-			for _, step := range protocol.Steps {
+			for i, step := range protocol.Steps {
 				stepPath := filepath.Join(sdir, "step", step.Slug, "step.sg.md")
 				stepFM, _, readErr := util.ReadFrontmatterFile(stepPath)
 				if readErr != nil {
@@ -939,7 +921,7 @@ func collectStatusIssues(root string) ([]string, error) {
 				if strings.TrimSpace(asString(stepFM["time_started"])) == "" {
 					issues = append(issues, "step missing time_started: "+stepPath)
 				}
-				if strings.TrimSpace(asString(stepFM["time_finished"])) == "" {
+				if i == len(protocol.Steps)-1 && strings.TrimSpace(asString(stepFM["time_finished"])) == "" {
 					issues = append(issues, "step missing time_finished: "+stepPath)
 				}
 			}
@@ -947,17 +929,6 @@ func collectStatusIssues(root string) ([]string, error) {
 	}
 	sort.Strings(issues)
 	return issues, nil
-}
-
-func hasNonEmptySubjectIDs(v any) bool {
-	switch ids := v.(type) {
-	case []any:
-		return len(ids) > 0
-	case []string:
-		return len(ids) > 0
-	default:
-		return false
-	}
 }
 
 func cmdPublish() error {
@@ -1053,17 +1024,23 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 		}
 		slug := e.Name()
 		sdir := filepath.Join(sessionRoot, slug)
-		sfm, _, err := util.ReadFrontmatterFile(filepath.Join(sdir, "session.sg.md"))
+		_, body, err := util.ReadFrontmatterFile(filepath.Join(sdir, "session.sg.md"))
 		if err != nil {
 			continue
 		}
-		ids := parseSubjectIDs(sfm["subject_ids"])
+		refs := parseSessionSubjects(body)
+		ids := make([]string, 0, len(refs))
 		names := make([]string, 0, len(ids))
-		for _, id := range ids {
-			if s, ok := subjectByID[id]; ok {
-				names = append(names, s.Name)
-			} else {
-				names = append(names, id)
+		for _, ref := range refs {
+			if strings.TrimSpace(ref.ID) != "" {
+				ids = append(ids, ref.ID)
+			}
+			name := ref.Name
+			if s, ok := subjectByID[ref.ID]; ok {
+				name = s.Name
+			}
+			if strings.TrimSpace(name) != "" {
+				names = append(names, name)
 			}
 		}
 		steps := make([]publishStep, 0, len(protocol.Steps))
@@ -1091,13 +1068,35 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 				ImageRefs: imgRefs,
 			})
 		}
-		sessions = append(sessions, publishSession{
-			Slug:       slug,
-			Started:    asString(sfm["time_started"]),
-			Finished:   asString(sfm["time_finished"]),
-			SubjectIDs: ids,
-			Subjects:   names,
-			Steps:      steps,
+			started := ""
+			finished := ""
+			for _, step := range steps {
+				if strings.TrimSpace(step.Started) != "" {
+					if started == "" {
+						started = step.Started
+					} else if st, errSt := util.ParseTimestamp(step.Started); errSt == nil {
+						if cur, errCur := util.ParseTimestamp(started); errCur == nil && st.Before(cur) {
+							started = step.Started
+						}
+					}
+				}
+				if strings.TrimSpace(step.Finished) != "" {
+					if finished == "" {
+						finished = step.Finished
+					} else if st, errSt := util.ParseTimestamp(step.Finished); errSt == nil {
+						if cur, errCur := util.ParseTimestamp(finished); errCur == nil && st.After(cur) {
+							finished = step.Finished
+						}
+					}
+				}
+			}
+			sessions = append(sessions, publishSession{
+				Slug:       slug,
+				Started:    started,
+				Finished:   finished,
+				SubjectIDs: ids,
+				Subjects:   names,
+				Steps:      steps,
 		})
 	}
 	sort.Slice(sessions, func(i, j int) bool {
@@ -1132,6 +1131,54 @@ func parseSubjectIDs(v any) []string {
 	default:
 		return nil
 	}
+}
+
+type sessionSubjectRef struct {
+	Name string
+	ID   string
+}
+
+func parseSessionSubjects(sessionBody string) []sessionSubjectRef {
+	section := extractSection(sessionBody, "Subjects")
+	if strings.TrimSpace(section) == "" {
+		return nil
+	}
+	lines := strings.Split(section, "\n")
+	out := make([]sessionSubjectRef, 0, len(lines))
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "- ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
+		}
+		if strings.HasPrefix(line, "* ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "* "))
+		}
+		name := line
+		id := ""
+		open := strings.LastIndex(line, "(")
+		close := strings.LastIndex(line, ")")
+		if open >= 0 && close > open {
+			parsedID := strings.TrimSpace(line[open+1 : close])
+			parsedName := strings.TrimSpace(line[:open])
+			if parsedID != "" {
+				id = parsedID
+			}
+			if parsedName != "" {
+				name = parsedName
+			}
+		}
+		if strings.TrimSpace(name) == "" && strings.TrimSpace(id) == "" {
+			continue
+		}
+		if strings.TrimSpace(name) == "" {
+			name = id
+		}
+		out = append(out, sessionSubjectRef{Name: name, ID: id})
+	}
+	return out
 }
 
 func renderPublishHTML(root, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
@@ -1282,6 +1329,30 @@ func cmdIngestPhotos(args []string) error {
 		return errors.New("no sessions found")
 	}
 
+	plans := make([]sessionIngestPlan, 0, len(sessions))
+	var globalStart time.Time
+	var globalEnd time.Time
+	for _, session := range sessions {
+		sessionDir := filepath.Join(root, "session", session)
+		windows, err := loadStepWindows(sessionDir, protocol)
+		if err != nil {
+			return fmt.Errorf("session %s: %w", session, err)
+		}
+		plans = append(plans, sessionIngestPlan{
+			slug:       session,
+			sessionDir: sessionDir,
+			windows:    windows,
+		})
+		for _, w := range windows {
+			if globalStart.IsZero() || w.Start.Before(globalStart) {
+				globalStart = w.Start
+			}
+			if globalEnd.IsZero() || w.End.After(globalEnd) {
+				globalEnd = w.End
+			}
+		}
+	}
+
 	var exported []string
 	if opts.AssetsDir != "" {
 		exported, err = collectImageFiles(opts.AssetsDir)
@@ -1293,49 +1364,50 @@ func cmdIngestPhotos(args []string) error {
 			return nil
 		}
 	} else {
-		tmpDir, err := os.MkdirTemp("", "sg-photos-*")
+		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(tmpDir)
-
-		exported, err = exportPhotosFromApplePhotosFn(opts.AlbumName, tmpDir)
+		sourceDir, err := defaultPhotosLibrarySourceDir(home)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("scanning Photos Library files from %s (mtime envelope %s to %s)\n", sourceDir, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
+		exported, err = collectImageFilesByMTime(sourceDir, globalStart, globalEnd, photosLibraryMTimeSkew)
 		if err != nil {
 			return err
 		}
 		if len(exported) == 0 {
-			fmt.Println("no photos exported from album", opts.AlbumName)
+			fmt.Println("no photos found in Photos Library source directory within mtime envelope", sourceDir)
 			return nil
 		}
 	}
 
 	total := ingestStats{}
-	for _, session := range sessions {
-		sessionDir := filepath.Join(root, "session", session)
-		windows, err := loadStepWindows(sessionDir, protocol)
-		if err != nil {
-			return fmt.Errorf("session %s: %w", session, err)
-		}
-		stats, err := ingestPhotosForSession(sessionDir, windows, exported, exifCaptureTimeFn, func(msg string, a ...any) {
-			fmt.Printf("session=%s ", session)
+	capturedAssets, err := buildCapturedAssets(exported, exifCaptureTimeFn)
+	if err != nil {
+		return err
+	}
+	for _, plan := range plans {
+		stats, err := ingestCapturedAssetsForSession(plan.sessionDir, plan.windows, capturedAssets, func(msg string, a ...any) {
+			fmt.Printf("session=%s ", plan.slug)
 			fmt.Printf(msg, a...)
 		})
 		if err != nil {
-			return fmt.Errorf("session %s: %w", session, err)
+			return fmt.Errorf("session %s: %w", plan.slug, err)
 		}
 		total.Copied += stats.Copied
 		total.SkippedDup += stats.SkippedDup
 		total.SkippedNoEXIF += stats.SkippedNoEXIF
 		total.SkippedWindow += stats.SkippedWindow
-		fmt.Printf("session %s: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", session, stats.Copied, stats.SkippedDup, stats.SkippedNoEXIF, stats.SkippedWindow)
+		fmt.Printf("session %s: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", plan.slug, stats.Copied, stats.SkippedDup, stats.SkippedNoEXIF, stats.SkippedWindow)
 	}
 	fmt.Printf("ingest complete: sessions=%d copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", len(sessions), total.Copied, total.SkippedDup, total.SkippedNoEXIF, total.SkippedWindow)
 	return nil
 }
 
 func parseIngestPhotosArgs(args []string) (ingestPhotosOptions, error) {
-	opts := ingestPhotosOptions{AlbumName: "SG Ingest"}
-	seenAlbum := false
+	opts := ingestPhotosOptions{}
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
 		if arg == "" {
@@ -1356,11 +1428,7 @@ func parseIngestPhotosArgs(args []string) (ingestPhotosOptions, error) {
 		case strings.HasPrefix(arg, "-"):
 			return opts, fmt.Errorf("unknown flag: %s", arg)
 		default:
-			if seenAlbum {
-				return opts, errors.New("only one album name positional argument is allowed")
-			}
-			opts.AlbumName = arg
-			seenAlbum = true
+			return opts, errors.New("album name positional arguments are no longer supported; default mode scans Photos Library files directly or use --assets-dir <path>")
 		}
 	}
 	return opts, nil
@@ -1389,28 +1457,132 @@ func collectImageFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-func ingestPhotosForSession(sessionDir string, windows []stepWindow, sources []string, captureTimeFn func(string) (time.Time, error), warnf func(string, ...any)) (ingestStats, error) {
+func collectImageFilesByMTime(root string, start, end time.Time, skew time.Duration) ([]string, error) {
+	minTime := start.Add(-skew)
+	maxTime := end.Add(skew)
+	minStr := minTime.Format("2006-01-02 15:04:05")
+	maxStr := maxTime.Format("2006-01-02 15:04:05")
+	cmd := exec.Command(
+		"find", root,
+		"-type", "f",
+		"(",
+		"-iname", "*.jpg",
+		"-o", "-iname", "*.jpeg",
+		"-o", "-iname", "*.png",
+		"-o", "-iname", "*.heic",
+		"-o", "-iname", "*.tif",
+		"-o", "-iname", "*.tiff",
+		")",
+		"-newermt", minStr,
+		"!", "-newermt", maxStr,
+	)
+	out, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		files := make([]string, 0, len(lines))
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if isIgnoredPhotosCandidatePath(line) {
+				continue
+			}
+			files = append(files, line)
+		}
+		sort.Strings(files)
+		return files, nil
+	}
+
+	var files []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if isIgnoredPhotosCandidatePath(path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isIgnoredPhotosCandidatePath(path) {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff":
+		default:
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		mod := info.ModTime()
+		if mod.Before(minTime) || mod.After(maxTime) {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func isIgnoredPhotosCandidatePath(path string) bool {
+	p := strings.ToLower(filepath.Clean(path))
+	parts := strings.Split(p, string(filepath.Separator))
+	for _, part := range parts {
+		if part == "derivatives" || part == "previews" {
+			return true
+		}
+	}
+	return false
+}
+
+type capturedAsset struct {
+	path        string
+	captureTime time.Time
+	exifErr     error
+}
+
+func buildCapturedAssets(sources []string, captureTimeFn func(string) (time.Time, error)) ([]capturedAsset, error) {
+	out := make([]capturedAsset, 0, len(sources))
+	for _, src := range sources {
+		captureTime, exifErr := captureTimeFn(src)
+		out = append(out, capturedAsset{
+			path:        src,
+			captureTime: captureTime,
+			exifErr:     exifErr,
+		})
+	}
+	return out, nil
+}
+
+func ingestCapturedAssetsForSession(sessionDir string, windows []stepWindow, assets []capturedAsset, warnf func(string, ...any)) (ingestStats, error) {
 	stats := ingestStats{}
 	existingHashes, err := collectSessionAssetHashes(sessionDir)
 	if err != nil {
 		return stats, err
 	}
 
-	for _, src := range sources {
-		captureTime, exifErr := captureTimeFn(src)
-		if exifErr != nil {
+	for _, asset := range assets {
+		if asset.exifErr != nil {
 			stats.SkippedNoEXIF++
 			if warnf != nil {
-				warnf("warning: skipped (missing EXIF capture time): %s\n", src)
+				warnf("warning: skipped (missing EXIF capture time): %s\n", asset.path)
 			}
 			continue
 		}
-		idx := findStepWindowIndex(captureTime, windows)
+		idx := findStepWindowIndex(asset.captureTime, windows)
 		if idx < 0 {
 			stats.SkippedWindow++
 			continue
 		}
-		hash8, err := fileSHA8(src)
+		hash8, err := fileSHA8(asset.path)
 		if err != nil {
 			return stats, err
 		}
@@ -1418,11 +1590,11 @@ func ingestPhotosForSession(sessionDir string, windows []stepWindow, sources []s
 			stats.SkippedDup++
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(src))
+		ext := strings.ToLower(filepath.Ext(asset.path))
 		if ext == "" {
 			ext = ".bin"
 		}
-		destName := fmt.Sprintf("%s_%s%s", captureTime.Local().Format("20060102-150405"), hash8, ext)
+		destName := fmt.Sprintf("%s_%s%s", asset.captureTime.Local().Format("20060102-150405"), hash8, ext)
 		destDir := filepath.Join(sessionDir, "step", windows[idx].StepSlug, "asset")
 		if err := util.EnsureDir(destDir); err != nil {
 			return stats, err
@@ -1432,7 +1604,7 @@ func ingestPhotosForSession(sessionDir string, windows []stepWindow, sources []s
 			stats.SkippedDup++
 			continue
 		}
-		if err := copyFile(src, dest); err != nil {
+		if err := copyFile(asset.path, dest); err != nil {
 			return stats, err
 		}
 		existingHashes[hash8] = true
@@ -1449,7 +1621,6 @@ type stepWindow struct {
 }
 
 type ingestPhotosOptions struct {
-	AlbumName string
 	AssetsDir string
 }
 
@@ -1460,12 +1631,129 @@ type ingestStats struct {
 	SkippedWindow int
 }
 
-var exportPhotosFromApplePhotosFn = exportPhotosFromApplePhotos
 var exifCaptureTimeFn = exifCaptureTime
+const photosLibraryMTimeSkew = 6 * time.Hour
+
+type sessionIngestPlan struct {
+	slug       string
+	sessionDir string
+	windows    []stepWindow
+}
+
+func defaultPhotosLibrarySourceDir(home string) (string, error) {
+	if strings.TrimSpace(home) == "" {
+		return "", errors.New("could not resolve user home directory for Photos Library lookup")
+	}
+	cfgPath := filepath.Join(home, ".study-guide", "config")
+	cfg, warnings, err := readStudyGuideConfig(cfgPath)
+	if err != nil {
+		return "", err
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
+	if strings.TrimSpace(cfg.PhotosLibraryPath) != "" {
+		configured := expandHomePath(strings.TrimSpace(cfg.PhotosLibraryPath), home)
+		info, err := os.Stat(configured)
+		if err == nil && info.IsDir() {
+			if resolved, ok := resolvePhotosLibraryAssetSubdir(configured); ok {
+				return resolved, nil
+			}
+			return configured, nil
+		}
+		if err != nil && os.IsNotExist(err) {
+			return "", fmt.Errorf("configured photos_library_path not found: %s", configured)
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed checking configured photos_library_path %s: %w", configured, err)
+		}
+		return "", fmt.Errorf("configured photos_library_path is not a directory: %s", configured)
+	}
+	candidates := []string{
+		filepath.Join(home, "Pictures", "Photos Library.photoslibrary", "originals"),
+		filepath.Join(home, "Pictures", "Photos Library.photoslibrary", "Masters"),
+	}
+	checked := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		checked = append(checked, path)
+		info, err := os.Stat(path)
+		if err == nil && info.IsDir() {
+			return path, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed checking Photos Library path %s: %w", path, err)
+		}
+	}
+	return "", fmt.Errorf("Photos Library source directory not found; checked: %s", strings.Join(checked, ", "))
+}
+
+func resolvePhotosLibraryAssetSubdir(path string) (string, bool) {
+	candidates := []string{
+		filepath.Join(path, "originals"),
+		filepath.Join(path, "Masters"),
+	}
+	for _, c := range candidates {
+		info, err := os.Stat(c)
+		if err == nil && info.IsDir() {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+type studyGuideConfig struct {
+	PhotosLibraryPath       string `yaml:"photos_library_path"`
+	PhotoLibraryPathLegacy string `yaml:"photo_library_path"`
+}
+
+func readStudyGuideConfig(path string) (studyGuideConfig, []string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return studyGuideConfig{}, nil, nil
+		}
+		return studyGuideConfig{}, nil, fmt.Errorf("failed reading config file %s: %w", path, err)
+	}
+	var cfg studyGuideConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return studyGuideConfig{}, nil, fmt.Errorf("invalid config file %s: %w", path, err)
+	}
+	var rawMap map[string]any
+	if err := yaml.Unmarshal(raw, &rawMap); err != nil {
+		return studyGuideConfig{}, nil, fmt.Errorf("invalid config file %s: %w", path, err)
+	}
+	warnings := []string{}
+	known := map[string]bool{
+		"photos_library_path": true,
+		"photo_library_path":  true,
+	}
+	for key := range rawMap {
+		if !known[key] {
+			warnings = append(warnings, fmt.Sprintf("warning: unrecognized config key in %s: %s", path, key))
+		}
+	}
+	if strings.TrimSpace(cfg.PhotosLibraryPath) == "" && strings.TrimSpace(cfg.PhotoLibraryPathLegacy) != "" {
+		cfg.PhotosLibraryPath = cfg.PhotoLibraryPathLegacy
+		warnings = append(warnings, fmt.Sprintf("warning: deprecated config key in %s: photo_library_path (use photos_library_path)", path))
+	}
+	sort.Strings(warnings)
+	return cfg, warnings, nil
+}
+
+func expandHomePath(path, home string) string {
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
 
 func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, error) {
 	starts := make([]time.Time, len(protocol.Steps))
 	finishes := make([]time.Time, len(protocol.Steps))
+	hasExplicitFinish := make([]bool, len(protocol.Steps))
 	for i, st := range protocol.Steps {
 		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
 		fm, _, err := util.ReadFrontmatterFile(stepPath)
@@ -1487,21 +1775,24 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 				return nil, fmt.Errorf("invalid step time_finished: %s", stepPath)
 			}
 			finishes[i] = ft
+			hasExplicitFinish[i] = true
 		}
 	}
 	last := len(protocol.Steps) - 1
 	if finishes[last].IsZero() {
 		return nil, errors.New("last step is missing time_finished")
 	}
+	for i := 0; i < last; i++ {
+		nextStart := starts[i+1]
+		if !hasExplicitFinish[i] || !finishes[i].Before(nextStart) {
+			finishes[i] = nextStart.Add(-1 * time.Second)
+		}
+	}
 
 	windows := make([]stepWindow, 0, len(protocol.Steps))
 	for i, st := range protocol.Steps {
 		w := stepWindow{StepSlug: st.Slug, Start: starts[i], Last: i == last}
-		if i == last {
-			w.End = finishes[i]
-		} else {
-			w.End = starts[i+1]
-		}
+		w.End = finishes[i]
 		windows = append(windows, w)
 	}
 	return windows, nil
@@ -1509,13 +1800,7 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 
 func findStepWindowIndex(captured time.Time, windows []stepWindow) int {
 	for i, w := range windows {
-		if w.Last {
-			if (captured.Equal(w.Start) || captured.After(w.Start)) && (captured.Equal(w.End) || captured.Before(w.End)) {
-				return i
-			}
-			continue
-		}
-		if (captured.Equal(w.Start) || captured.After(w.Start)) && captured.Before(w.End) {
+		if (captured.Equal(w.Start) || captured.After(w.Start)) && (captured.Equal(w.End) || captured.Before(w.End)) {
 			return i
 		}
 	}
@@ -1536,42 +1821,6 @@ func listSessionSlugs(root string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
-}
-
-func exportPhotosFromApplePhotos(albumName, outDir string) ([]string, error) {
-	script := fmt.Sprintf(`set exportFolder to POSIX file "%s"
-tell application "Photos"
-	if not (exists album "%s") then
-		error "album not found: %s"
-	end if
-	set mediaItems to media items of album "%s"
-	if (count of mediaItems) is 0 then
-		return
-	end if
-	export mediaItems to exportFolder with using originals
-end tell`, escapeAppleScriptString(outDir), escapeAppleScriptString(albumName), escapeAppleScriptString(albumName), escapeAppleScriptString(albumName))
-	cmd := exec.Command("osascript", "-e", script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("failed exporting from Apple Photos: %v (%s)", err, strings.TrimSpace(string(out)))
-	}
-	var files []string
-	_ = filepath.WalkDir(outDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		switch ext {
-		case ".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff":
-			files = append(files, path)
-		}
-		return nil
-	})
-	sort.Strings(files)
-	return files, nil
-}
-
-func escapeAppleScriptString(s string) string {
-	return strings.ReplaceAll(s, `"`, `\\"`)
 }
 
 func exifCaptureTime(path string) (time.Time, error) {
