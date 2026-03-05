@@ -43,6 +43,8 @@ func Run(args []string) int {
 		err = cmdPublish()
 	case "ingest-photos":
 		err = cmdIngestPhotos(args[1:])
+	case "rm-assets":
+		err = cmdRmAssets(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return 0
@@ -68,7 +70,8 @@ Commands:
   sessions
   status
   publish
-  ingest-photos`)
+  ingest-photos
+  rm-assets`)
 }
 
 func cmdInit() error {
@@ -1372,14 +1375,27 @@ func cmdIngestPhotos(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("scanning Photos Library files from %s (mtime envelope %s to %s)\n", sourceDir, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
-		exported, err = collectImageFilesByMTime(sourceDir, globalStart, globalEnd, photosLibraryMTimeSkew)
-		if err != nil {
-			return err
-		}
-		if len(exported) == 0 {
-			fmt.Println("no photos found in Photos Library source directory within mtime envelope", sourceDir)
-			return nil
+		dbPath, originalsRoot, hasSQLite := photosLibrarySQLiteContextFromSourceDir(sourceDir)
+		if hasSQLite {
+			fmt.Printf("scanning Photos Library assets from %s using SQLite window %s to %s\n", dbPath, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
+			exported, err = collectPhotosLibraryImageFilesBySQLite(dbPath, originalsRoot, globalStart, globalEnd, photosLibraryMTimeSkew)
+			if err != nil {
+				return err
+			}
+			if len(exported) == 0 {
+				fmt.Println("no photos found in Photos Library SQLite metadata window", dbPath)
+				return nil
+			}
+		} else {
+			fmt.Printf("scanning Photos Library files from %s (mtime envelope %s to %s)\n", sourceDir, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
+			exported, err = collectImageFilesByMTime(sourceDir, globalStart, globalEnd, photosLibraryMTimeSkew)
+			if err != nil {
+				return err
+			}
+			if len(exported) == 0 {
+				fmt.Println("no photos found in Photos Library source directory within mtime envelope", sourceDir)
+				return nil
+			}
 		}
 	}
 
@@ -1403,6 +1419,42 @@ func cmdIngestPhotos(args []string) error {
 		fmt.Printf("session %s: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", plan.slug, stats.Copied, stats.SkippedDup, stats.SkippedNoEXIF, stats.SkippedWindow)
 	}
 	fmt.Printf("ingest complete: sessions=%d copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", len(sessions), total.Copied, total.SkippedDup, total.SkippedNoEXIF, total.SkippedWindow)
+	return nil
+}
+
+func cmdRmAssets(args []string) error {
+	if len(args) > 0 {
+		return errors.New("usage: sg rm-assets")
+	}
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	sessionRoot := filepath.Join(root, "session")
+	removed := 0
+	err = filepath.WalkDir(sessionRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.Contains(filepath.ToSlash(path), "/step/") || !strings.Contains(filepath.ToSlash(path), "/asset/") {
+			return nil
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		removed++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed asset files: %d\n", removed)
 	return nil
 }
 
@@ -1455,6 +1507,109 @@ func collectImageFiles(root string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func photosLibrarySQLiteContextFromSourceDir(sourceDir string) (string, string, bool) {
+	clean := filepath.Clean(sourceDir)
+	// Common case: sourceDir points to .../Photos Library.photoslibrary/originals
+	base := strings.ToLower(filepath.Base(clean))
+	if base == "originals" || base == "masters" {
+		libRoot := filepath.Dir(clean)
+		dbPath := filepath.Join(libRoot, "database", "Photos.sqlite")
+		if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+			return dbPath, clean, true
+		}
+	}
+	// Alternate case: sourceDir points to package root.
+	dbPath := filepath.Join(clean, "database", "Photos.sqlite")
+	origRoot := filepath.Join(clean, "originals")
+	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+		if oinfo, oerr := os.Stat(origRoot); oerr == nil && oinfo.IsDir() {
+			return dbPath, origRoot, true
+		}
+	}
+	return "", "", false
+}
+
+func collectPhotosLibraryImageFilesBySQLite(dbPath, originalsRoot string, start, end time.Time, skew time.Duration) ([]string, error) {
+	minTime := start.Add(-skew)
+	maxTime := end.Add(skew)
+	minUnix := minTime.Unix()
+	maxUnix := maxTime.Unix()
+	minExif := minTime.Local().Format("2006:01:02 15:04:05")
+	maxExif := maxTime.Local().Format("2006:01:02 15:04:05")
+	query := fmt.Sprintf(`
+SELECT DISTINCT
+  COALESCE(a.ZDIRECTORY, ''),
+  a.ZFILENAME
+FROM ZASSET a
+LEFT JOIN ZADDITIONALASSETATTRIBUTES aa ON aa.ZASSET = a.Z_PK
+WHERE a.ZFILENAME IS NOT NULL
+  AND (
+    lower(a.ZFILENAME) LIKE '%%.jpg'
+    OR lower(a.ZFILENAME) LIKE '%%.jpeg'
+    OR lower(a.ZFILENAME) LIKE '%%.png'
+    OR lower(a.ZFILENAME) LIKE '%%.heic'
+    OR lower(a.ZFILENAME) LIKE '%%.tif'
+    OR lower(a.ZFILENAME) LIKE '%%.tiff'
+  )
+  AND (
+    (a.ZDATECREATED IS NOT NULL AND (a.ZDATECREATED + strftime('%%s','2001-01-01 00:00:00')) BETWEEN %d AND %d)
+    OR (aa.ZEXIFTIMESTAMPSTRING IS NOT NULL AND aa.ZEXIFTIMESTAMPSTRING >= '%s' AND aa.ZEXIFTIMESTAMPSTRING <= '%s')
+  );`, minUnix, maxUnix, minExif, maxExif)
+	out, err := runSQLiteQueryFn(dbPath, query)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	files := []string{}
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		dir := strings.TrimSpace(parts[0])
+		name := strings.TrimSpace(parts[1])
+		if name == "" || !isSupportedImageExt(name) {
+			continue
+		}
+		path := filepath.Join(originalsRoot, dir, name)
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.IsDir() {
+			continue
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		files = append(files, path)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func isSupportedImageExt(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff":
+		return true
+	default:
+		return false
+	}
+}
+
+var runSQLiteQueryFn = runSQLiteQuery
+
+func runSQLiteQuery(dbPath, query string) (string, error) {
+	cmd := exec.Command("sqlite3", "-readonly", "-noheader", "-separator", "|", dbPath, query)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed querying Photos sqlite db %s: %v (%s)", dbPath, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 func collectImageFilesByMTime(root string, start, end time.Time, skew time.Duration) ([]string, error) {

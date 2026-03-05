@@ -163,7 +163,7 @@ Optional markdown body:
 
 `sg` is the executable.
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
-`sg session advance`, `sg ingest-photos`, `sg status`, and `sg publish` are non-interactive.
+`sg session advance`, `sg ingest-photos`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
 
 ### `sg init`
 Interactive prompt:
@@ -289,7 +289,7 @@ Behavior:
 Purpose: copy photo assets into matching step `asset/` folders by capture time.
 
 Input source:
-- default: direct filesystem scan of original assets in the Photos Library on macOS (no AppleScript export step)
+- default: query Photos Library SQLite metadata (`database/Photos.sqlite`) on macOS, then resolve matched assets from `originals/` on disk
 - optional: `--assets-dir <path>` recursively reads image files from a local directory (used for tests/dev; also valid on non-macOS)
 
 Session targeting:
@@ -323,6 +323,16 @@ Reports missing/invalid data that affects publication:
 Outputs:
 - issue list
 - overall completeness flag
+
+### `sg rm-assets`
+Purpose: remove all ingested step assets from the current study.
+
+Behavior:
+- non-interactive
+- scans all sessions under `<study-root>/session/`
+- deletes regular files under `step/<step-slug>/asset/` directories
+- preserves study/session/step markdown files and directory structure
+- prints a summary count of removed asset files
 
 ### `sg publish`
 Generates both site and PDF from study files.
@@ -418,11 +428,12 @@ All criteria below are pass/fail requirements for v1.
 3. `--assets-dir` is optional.
 4. Default mode scans expected Photos Library package subdirectories on disk and fails loudly with the checked paths when none are found.
    The default source path is configurable via `~/.study-guide/config` key `photos_library_path`.
-   If configured path points at `Photos Library.photoslibrary` package root, ingestion resolves to `originals/` (or `Masters/` fallback) and does not scan derivative/preview subtrees.
-   Even when a broad source root is used, files under `derivatives/` and `previews/` are excluded from candidate scanning.
+   If configured path points at `Photos Library.photoslibrary` package root, ingestion resolves to `originals/` (or `Masters/` fallback) for file copy targets.
+   When `database/Photos.sqlite` is available, candidate assets are selected via SQL metadata query (not filesystem `mtime` walk), then resolved to `originals/<ZDIRECTORY>/<ZFILENAME>`.
+   If configured source is not a Photos Library package (no `database/Photos.sqlite`), ingestion falls back to filesystem scanning.
    Unrecognized keys in `~/.study-guide/config` are ignored but emitted as warnings.
 5. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
-6. In default mode, candidate files are pre-filtered by filesystem `mtime` against the global session step-window envelope before EXIF reads, so ingest does not traverse the entire library as EXIF candidates.
+6. In default mode with Photos Library package input, candidate files are discovered from SQLite metadata time fields (windowed by session step envelopes) before EXIF reads.
 6. Time-window matching rule is enforced:
 - non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
@@ -432,6 +443,7 @@ All criteria below are pass/fail requirements for v1.
 10. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
 10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
 11. Output includes per-session ingest counts and aggregate totals.
+12. `sg ingest-photos --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
@@ -441,6 +453,11 @@ All criteria below are pass/fail requirements for v1.
 5. `sg status` outputs:
 - a human-readable issue list
 - an overall completeness result
+
+### H. Asset Cleanup
+1. `sg rm-assets` removes all files under every `session/*/step/*/asset/` directory in the current study.
+2. `sg rm-assets` does not delete `study.sg.md`, `protocol.sg.md`, `session.sg.md`, or `step.sg.md`.
+3. `sg rm-assets` outputs a deterministic summary count of removed files.
 
 ### G. Publish
 1. `sg publish` always attempts generation (best effort), even if data is incomplete.

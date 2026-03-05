@@ -217,6 +217,68 @@ func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	assertAssetCount(t, studyRoot, sessionA, 3)
 }
 
+func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-complete"), studyRoot)
+
+	sessionSlug := "18-02-2026-boehmer"
+	stepRoot := filepath.Join(studyRoot, "session", sessionSlug, "step")
+	for _, step := range []string{"first-exposure", "ground", "second-exposure"} {
+		assetDir := filepath.Join(stepRoot, step, "asset")
+		if err := os.RemoveAll(assetDir); err != nil {
+			t.Fatalf("RemoveAll %s error: %v", assetDir, err)
+		}
+		if err := os.MkdirAll(assetDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll %s error: %v", assetDir, err)
+		}
+	}
+
+	assetsDir, err := filepath.Abs(filepath.Join("..", "..", "..", "test-data", "ingest-study-complete-assets"))
+	if err != nil {
+		t.Fatalf("Abs assets dir error: %v", err)
+	}
+
+	assetTimes := map[string]string{
+		"20260218-232533_583457f3.heic": "23:25:33 18-02-2026",
+		"20260218-234841_f428ad30.heic": "23:48:41 18-02-2026",
+		"20260218-234906_df3cf56d.heic": "23:49:06 18-02-2026",
+		"20260218-234913_b0946212.heic": "23:49:13 18-02-2026",
+		"20260218-234933_d724160a.heic": "23:49:33 18-02-2026",
+		"20260219-000224_1decaf8d.heic": "00:02:24 19-02-2026",
+		"20260219-000319_c49dc602.heic": "00:03:19 19-02-2026",
+		"20260222-124813_65e44e5a.png":  "12:48:13 22-02-2026",
+		"20260302-225319_83be6e9a.png":  "22:53:19 02-03-2026",
+	}
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		raw, ok := assetTimes[filepath.Base(path)]
+		if !ok {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, raw), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+		t.Fatalf("cmdIngestPhotos error: %v", err)
+	}
+
+	assertStepAssetCount(t, studyRoot, sessionSlug, "first-exposure", 1)
+	assertStepAssetCount(t, studyRoot, sessionSlug, "ground", 4)
+	assertStepAssetCount(t, studyRoot, sessionSlug, "second-exposure", 2)
+	assertAssetCount(t, studyRoot, sessionSlug, 7)
+}
+
 func TestCmdIngestPhotos_ParsesExifOncePerSourceAcrossSessions(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
@@ -369,6 +431,116 @@ func TestCmdIngestPhotos_DefaultMode_UsesConfiguredPhotosLibraryPath(t *testing.
 		t.Fatalf("cmdIngestPhotos default mode error: %v", err)
 	}
 	assertAssetCount(t, studyRoot, sessionA, 3)
+}
+
+func TestCollectPhotosLibraryImageFilesBySQLite_MapsRowsToOriginalPaths(t *testing.T) {
+	tmp := t.TempDir()
+	libraryRoot := filepath.Join(tmp, "Photos Library.photoslibrary")
+	originalsRoot := filepath.Join(libraryRoot, "originals")
+	if err := os.MkdirAll(filepath.Join(originalsRoot, "4"), 0o755); err != nil {
+		t.Fatalf("MkdirAll originals dir error: %v", err)
+	}
+	existing := filepath.Join(originalsRoot, "4", "A.heic")
+	mustWriteFile(t, existing, "a")
+
+	origQuery := runSQLiteQueryFn
+	runSQLiteQueryFn = func(dbPath, query string) (string, error) {
+		return "4|A.heic\n4|MISSING.heic\n4|clip.mov\ninvalid\n", nil
+	}
+	defer func() { runSQLiteQueryFn = origQuery }()
+
+	got, err := collectPhotosLibraryImageFilesBySQLite(
+		filepath.Join(libraryRoot, "database", "Photos.sqlite"),
+		originalsRoot,
+		mustParseTS(t, "10:00:00 01-01-2026"),
+		mustParseTS(t, "11:00:00 01-01-2026"),
+		0,
+	)
+	if err != nil {
+		t.Fatalf("collectPhotosLibraryImageFilesBySQLite returned error: %v", err)
+	}
+	if len(got) != 1 || got[0] != existing {
+		t.Fatalf("unexpected mapped originals from sqlite rows: %#v", got)
+	}
+}
+
+func TestCmdIngestPhotos_DefaultMode_UsesSQLiteAssetDiscoveryWhenDatabaseExists(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("default ingest mode is macOS-only")
+	}
+
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "test-data", "study-eg"), studyRoot)
+	sessionA := "18-02-2026-boehmer"
+
+	libraryRoot := filepath.Join(tmp, "Photos Library.photoslibrary")
+	originalsDir := filepath.Join(libraryRoot, "originals", "4")
+	if err := os.MkdirAll(originalsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll originals dir error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(libraryRoot, "database"), 0o755); err != nil {
+		t.Fatalf("MkdirAll database dir error: %v", err)
+	}
+	dbPath := filepath.Join(libraryRoot, "database", "Photos.sqlite")
+	mustWriteFile(t, dbPath, "")
+
+	src := filepath.Join("testdata", "ingest-assets", "first-a.jpg")
+	dbNamedAsset := filepath.Join(originalsDir, "4B7F46CC-5DBF-4185-A5A5-14D6096E8FB6.heic")
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile asset %s error: %v", src, err)
+	}
+	if err := os.WriteFile(dbNamedAsset, b, 0o644); err != nil {
+		t.Fatalf("WriteFile asset %s error: %v", dbNamedAsset, err)
+	}
+	// Outside mtime envelope; should still be discovered through SQLite metadata rows.
+	farTS := mustParseTS(t, "10:00:00 01-01-2028")
+	if err := os.Chtimes(dbNamedAsset, farTS, farTS); err != nil {
+		t.Fatalf("Chtimes %s error: %v", dbNamedAsset, err)
+	}
+
+	home := filepath.Join(tmp, "home")
+	configPath := filepath.Join(home, ".study-guide", "config")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll config dir error: %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("photos_library_path: "+libraryRoot+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile config error: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	origQuery := runSQLiteQueryFn
+	runSQLiteQueryFn = func(gotDBPath, query string) (string, error) {
+		if gotDBPath != dbPath {
+			t.Fatalf("unexpected db path: got=%q want=%q", gotDBPath, dbPath)
+		}
+		return "4|4B7F46CC-5DBF-4185-A5A5-14D6096E8FB6.heic\n", nil
+	}
+	defer func() { runSQLiteQueryFn = origQuery }()
+
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		if path != dbNamedAsset {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, "23:25:33 18-02-2026"), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if err := cmdIngestPhotos(nil); err != nil {
+		t.Fatalf("cmdIngestPhotos default mode error: %v", err)
+	}
+	assertAssetCount(t, studyRoot, sessionA, 1)
 }
 
 func TestParseIngestPhotosArgs_RejectsPositionalAlbumName(t *testing.T) {
@@ -664,5 +836,23 @@ func assertAssetCount(t *testing.T, studyRoot, sessionSlug string, want int) {
 	}
 	if count != want {
 		t.Fatalf("session %s asset count=%d want=%d", sessionSlug, count, want)
+	}
+}
+
+func assertStepAssetCount(t *testing.T, studyRoot, sessionSlug, stepSlug string, want int) {
+	t.Helper()
+	assetRoot := filepath.Join(studyRoot, "session", sessionSlug, "step", stepSlug, "asset")
+	entries, err := os.ReadDir(assetRoot)
+	if err != nil {
+		t.Fatalf("ReadDir %s error: %v", assetRoot, err)
+	}
+	got := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("session %s step %s asset count=%d want=%d", sessionSlug, stepSlug, got, want)
 	}
 }
