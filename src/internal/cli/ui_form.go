@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 type formField struct {
@@ -46,13 +46,13 @@ func (m formModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c", "esc"))):
 			m.canceled = true
 			m.done = true
 			return m, tea.Quit
-		case msg.Type == tea.KeyEnter:
+		case msg.Code == tea.KeyEnter:
 			if m.fields[m.index].Required && strings.TrimSpace(m.inputs[m.index].Value()) == "" {
 				m.err = fmt.Sprintf("%s is required", m.fields[m.index].Label)
 				return m, nil
@@ -66,14 +66,14 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.index++
 			m.inputs[m.index].Focus()
 			return m, nil
-		case msg.Type == tea.KeyShiftTab || msg.String() == "up":
+		case msg.String() == "shift+tab" || msg.String() == "up":
 			if m.index > 0 {
 				m.inputs[m.index].Blur()
 				m.index--
 				m.inputs[m.index].Focus()
 			}
 			return m, nil
-		case msg.Type == tea.KeyTab || msg.String() == "down":
+		case msg.Code == tea.KeyTab || msg.String() == "down":
 			if m.index < len(m.inputs)-1 {
 				if m.fields[m.index].Required && strings.TrimSpace(m.inputs[m.index].Value()) == "" {
 					m.err = fmt.Sprintf("%s is required", m.fields[m.index].Label)
@@ -95,7 +95,7 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m formModel) View() string {
+func (m formModel) View() tea.View {
 	var b strings.Builder
 	b.WriteString(m.title + "\n\n")
 	for _, in := range m.inputs {
@@ -106,7 +106,7 @@ func (m formModel) View() string {
 		b.WriteString("\nError: " + m.err + "\n")
 	}
 	b.WriteString("\nEnter to continue. Tab/Shift+Tab to move. Esc to cancel.\n")
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 func runForm(title string, fields []formField) (map[string]string, bool, error) {

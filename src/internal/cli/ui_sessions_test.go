@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/table"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/table"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"study-guide/src/internal/store"
 	"study-guide/src/internal/util"
@@ -222,17 +222,18 @@ func TestSessionsUI_Interaction_RightLeftMovesSingleVisibleFocus(t *testing.T) {
 		StepCount:     3,
 		NextStep:      "Second Exposure",
 	}
+	m.table.SetWidth(120)
 	m.applyBrowseEntries()
 
 	_, _, active, step, next := m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
 	assertSingleFocusedActionCell(t, active, step, next)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	m = updated.(sessionsSwitchboardModel)
 	_, _, active, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
 	assertSingleFocusedActionCell(t, active, step, next)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	m = updated.(sessionsSwitchboardModel)
 	_, _, active, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
 	assertSingleFocusedActionCell(t, active, step, next)
@@ -250,6 +251,7 @@ func TestSessionsUI_TableRowMapping_ActiveAndStepDoNotShift(t *testing.T) {
 				{Title: "STEP", Width: 24},
 				{Title: "NEXT", Width: 16},
 			}),
+			table.WithHeight(4),
 		),
 		browseRecords: []sessionRecord{
 			{
@@ -303,6 +305,7 @@ func TestSessionsUI_ViewStylesFocusedTokensPostRender(t *testing.T) {
 				{Title: "STEP", Width: 24},
 				{Title: "NEXT", Width: 16},
 			}),
+			table.WithHeight(4),
 		),
 		browseRecords: []sessionRecord{
 			{
@@ -315,8 +318,9 @@ func TestSessionsUI_ViewStylesFocusedTokensPostRender(t *testing.T) {
 			},
 		},
 	}
+	m.table.SetWidth(120)
 	m.applyBrowseEntries()
-	out := m.View()
+	out := m.View().Content
 	if !strings.Contains(out, "{activate}") {
 		t.Fatalf("expected focused token in view output, got:\n%s", stripANSI(out))
 	}
@@ -345,6 +349,7 @@ func TestSessionsUI_View_DefaultActionCellsAreStyledAsCTA(t *testing.T) {
 				{Title: "NEXT", Width: 16},
 			}),
 			table.WithRows([]table.Row{{"s1", "", "", "", ""}}),
+			table.WithHeight(4),
 		),
 	}
 	rec := sessionRecord{
@@ -356,9 +361,10 @@ func TestSessionsUI_View_DefaultActionCellsAreStyledAsCTA(t *testing.T) {
 		NextStep:      "Second Exposure",
 	}
 	m.browseRecords = []sessionRecord{rec}
+	m.table.SetWidth(120)
 	m.applyBrowseEntries()
 
-	out := m.View()
+	out := m.View().Content
 	if count := strings.Count(out, actionCellANSIPrefix); count < 2 {
 		t.Fatalf("expected CTA styling in both ACTIVE and NEXT cells, prefix_count=%d", count)
 	}
@@ -518,7 +524,7 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 		selectedBySubject: map[string]bool{},
 	}
 	m.refreshCreateList()
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 
 	expectedInOrder := []string{
 		"Create Session",
@@ -589,10 +595,10 @@ func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 		selectedBySubject: selected,
 	}
 	m.refreshCreateList()
-	switchboardView := stripANSI(m.View())
+	switchboardView := stripANSI(m.View().Content)
 
 	picker := newSessionCreatePickerModel(subjects, selected)
-	pickerView := stripANSI(picker.View())
+	pickerView := stripANSI(picker.View().Content)
 
 	expectedInOrder := []string{
 		"Create Session",
@@ -632,7 +638,7 @@ func TestSessionsUI_ViewShowsPublishHintWhenEligible(t *testing.T) {
 		finishedSessionCount:   2,
 		inProgressSessionCount: 0,
 	}
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 	if !strings.Contains(out, "p publish with 2 sessions") {
 		t.Fatalf("expected publish hint in browse footer, got:\n%s", out)
 	}
@@ -646,7 +652,7 @@ func TestSessionsUI_ViewHidesPublishHintWhenIneligible(t *testing.T) {
 		finishedSessionCount:   2,
 		inProgressSessionCount: 1,
 	}
-	out := stripANSI(m.View())
+	out := stripANSI(m.View().Content)
 	if strings.Contains(out, "p publish with") {
 		t.Fatalf("did not expect publish hint in browse footer, got:\n%s", out)
 	}
@@ -665,7 +671,7 @@ func TestSessionsUI_KeyPTriggersPublishAlways(t *testing.T) {
 			return nil
 		},
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = updated.(sessionsSwitchboardModel)
 	if publishCalls != 1 {
 		t.Fatalf("expected publish to run once when eligible, got %d", publishCalls)
@@ -673,7 +679,7 @@ func TestSessionsUI_KeyPTriggersPublishAlways(t *testing.T) {
 
 	m.finishedSessionCount = 1
 	m.inProgressSessionCount = 1
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = updated.(sessionsSwitchboardModel)
 	if publishCalls != 2 {
 		t.Fatalf("expected publish to run even when hint is hidden, got %d calls", publishCalls)

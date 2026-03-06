@@ -7,11 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
 	"study-guide/src/internal/store"
@@ -109,7 +109,7 @@ func newSessionsFilterInput() textinput.Model {
 	fi.Prompt = " filter: "
 	fi.Placeholder = "by subject or slug"
 	fi.CharLimit = 120
-	fi.Width = 60
+	fi.SetWidth(60)
 	fi.Focus()
 	return fi
 }
@@ -190,8 +190,8 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = max(msg.Width-2, 60)
 		m.applyBrowseTableLayout()
 		m.list.SetSize(max(msg.Width-2, 60), max(msg.Height-8, 8))
-		m.filter.Width = max(msg.Width-18, 20)
-	case tea.KeyMsg:
+		m.filter.SetWidth(max(msg.Width-18, 20))
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -275,7 +275,7 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m sessionsSwitchboardModel) View() string {
+func (m sessionsSwitchboardModel) View() tea.View {
 	if m.view == sessionsViewCreate {
 		var b strings.Builder
 		header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
@@ -288,7 +288,7 @@ func (m sessionsSwitchboardModel) View() string {
 			b.WriteString("\n")
 			b.WriteString(subtleTextStyle.Render(m.message))
 		}
-		return b.String()
+		return tea.NewView(b.String())
 	}
 
 	current := "current step: -"
@@ -319,7 +319,7 @@ func (m sessionsSwitchboardModel) View() string {
 		footer += "  " + brightHintStyle.Render(fmt.Sprintf("p publish with %d sessions", m.finishedSessionCount))
 	}
 	b.WriteString(footer)
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
@@ -509,6 +509,7 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 		}
 	}
 	m.table.SetRows(rows)
+	m.table.UpdateViewport()
 	if targetCursor >= 0 && targetCursor < len(rows) {
 		m.table.SetCursor(targetCursor)
 	} else {
@@ -606,11 +607,11 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if strings.TrimSpace(next) == "" {
 			next = "-"
 		}
-		activeText := "activate"
+		activeBaseText := ""
 		if rec.Active {
-			activeText = "active"
+			activeBaseText = "active"
 		}
-		activeStyled := encodeActionCellToken(activeText)
+		activeStyled := encodeActionCellToken(activeBaseText)
 		nextStyled := encodeActionCellToken(next)
 		selectedSlug := ""
 		if sel, ok := m.selectedBrowseEntry(); ok && sel.kind == browseEntrySession {
@@ -620,8 +621,12 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 			selectedSlug = m.browseEntries[0].record.Slug
 		}
 		if rec.Slug == selectedSlug {
+			if !rec.Active {
+				activeBaseText = "activate"
+				activeStyled = encodeActionCellToken(activeBaseText)
+			}
 			if m.actionCursor == sessionActionCursorActive {
-				activeStyled = encodeActionCellToken("{" + activeText + "}")
+				activeStyled = encodeActionCellToken("{" + activeBaseText + "}")
 			} else {
 				nextStyled = encodeActionCellToken("{" + next + "}")
 			}

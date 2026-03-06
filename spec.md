@@ -22,13 +22,14 @@ In scope:
 - best-effort publish (HTML + PDF)
 
 Implementation references (preferred libraries):
-- TUI framework: https://github.com/charmbracelet/bubbletea
-- TUI components: https://github.com/charmbracelet/bubbles
+- TUI framework: https://charm.land/bubbletea/v2
+- TUI components: https://charm.land/bubbles/v2
 - terminal markdown rendering: https://github.com/charmbracelet/glow
 
 ## Architecture and Implementation Notes
 - Interactive command workflows should run in a single long-lived Bubble Tea program per command invocation.
 - Within an interactive command, transitions between screens/actions should be internal model state changes, not nested `tea.NewProgram` launches.
+- Bubble Tea models use `View() tea.View` and return text content via `tea.NewView(...)`.
 
 Out of scope for v1:
 - full non-interactive coverage for all commands except where explicitly defined
@@ -128,11 +129,22 @@ Optional markdown sections:
 - `# Actions`
 
 ## `<study-root>/subject-requirements.yaml`
-Required keys:
-- `type: person`
+Required keys: none
 
-Optional keys specify required fields for subject creation flow:
+Optionally, may specify fixed key/value pairs that then MUST exist on the subject for the subject to be
+elligible for the study. E.g., to indicate that all study subjects must be people:
+- `type: person`
+Though any key/value pair may be fixed.
+
+When creating a new subject from inside the study (regardless whether via non/interactive
+mode), the fixed key/value pairs should be displayed but not editable, and the required
+fields should be enforced
+
+Optionally, may specify a list of required fields for subject creation flow:
 - `required_fields` (array: any of `name`, `email`, `phone`, `age`, `sex`)
+
+These requirements must be enforced at session creation time when subject selection takes
+place. Subjects not meeting the criteria should not be presented as selectable.
 
 ## `<study-root>/session/<slug>/session.sg.md`
 Required frontmatter:
@@ -255,8 +267,10 @@ Behavior:
 12. Replace generic item-count status text with `current step: <step-name|->` status text.
 13. In selected row, the focused actionable cell is visually emphasized (high-contrast and bracketed).
 14. `ACTIVE` column text is:
-- `active` when row is the currently active session
-- `activate` otherwise
+- always `active` when row is the currently active session
+- `activate` when row is selected and not active
+- empty for non-selected, non-active rows
+  When the active action cursor is on `ACTIVE`, the visible text is bracketed (for example `{active}` or `{activate}`).
 15. `NEXT` column shows the next transition label (or `conclude` when progress action is `finish`).
    Actionable cells (`ACTIVE` and `NEXT`) use a subtle default background tint to indicate CTA affordance even when unfocused.
 16. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `ACTIVE=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).

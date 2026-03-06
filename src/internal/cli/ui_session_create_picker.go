@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"study-guide/src/internal/store"
 )
@@ -74,7 +74,7 @@ func (m sessionCreatePickerModel) Init() tea.Cmd { return nil }
 
 func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			m.canceled = true
@@ -114,7 +114,7 @@ func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m sessionCreatePickerModel) View() string {
+func (m sessionCreatePickerModel) View() tea.View {
 	var b strings.Builder
 	header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
 	b.WriteString(header)
@@ -126,7 +126,7 @@ func (m sessionCreatePickerModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(subtleTextStyle.Render(m.message))
 	}
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 func (m sessionCreatePickerModel) SelectedSubjects() []store.Subject {

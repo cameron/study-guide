@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 )
 
 type listItem string
@@ -24,9 +24,9 @@ func (m listModel) Init() tea.Cmd { return nil }
 
 func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Start filtering immediately when typing, without requiring "/".
-		if !m.list.SettingFilter() && msg.Type == tea.KeyRunes && hasNonSpaceRune(msg.Runes) {
+		if !m.list.SettingFilter() && msg.Text != "" && hasNonSpaceText(msg.Text) {
 			m.list.SetShowFilter(true)
 			m.list.SetFilteringEnabled(true)
 			m.list.SetFilterState(list.Filtering)
@@ -53,7 +53,7 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m listModel) View() string { return m.list.View() }
+func (m listModel) View() tea.View { return tea.NewView(m.list.View()) }
 
 func runSelect(title string, items []string) (string, bool, error) {
 	lis := make([]list.Item, 0, len(items))
@@ -78,8 +78,8 @@ func runSelect(title string, items []string) (string, bool, error) {
 	return out.selected, false, nil
 }
 
-func hasNonSpaceRune(rs []rune) bool {
-	for _, r := range rs {
+func hasNonSpaceText(text string) bool {
+	for _, r := range text {
 		if !unicode.IsSpace(r) {
 			return true
 		}
