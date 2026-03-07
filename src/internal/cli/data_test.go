@@ -15,6 +15,7 @@ func TestRunDataIngest_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 
 	sessionA := "18-02-2026-boehmer"
 	assetsDir, err := filepath.Abs(filepath.Join("testdata", "ingest-assets"))
@@ -69,6 +70,7 @@ func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 	mustWriteFile(t, filepath.Join(root, "session", "02-01-2026-beta", "step", "02-step-two", "asset", "z-last.jpg"), "a")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "02-step-two", "asset", "b-two.jpg"), "b")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "asset", "a-one.jpg"), "c")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "asset", ".DS_Store"), "ignored")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "step.sg.md"), "---\n---\n")
 
 	oldwd, err := os.Getwd()
@@ -91,6 +93,9 @@ func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, ".DS_Store") {
+		t.Fatalf("expected output to exclude .DS_Store entries, got:\n%s", out)
 	}
 
 	first := strings.Index(out, "01-01-2026-alpha")

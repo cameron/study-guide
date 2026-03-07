@@ -556,41 +556,53 @@ func cmdSession(args []string) error {
 		return err
 	}
 	var prevStepPath string
-	for i, step := range protocol.Steps {
+		for i, step := range protocol.Steps {
+			if prevStepPath != "" {
+				if _, canceled, err := runSelect("Advance to next step", []string{"Continue", "Cancel"}); err != nil {
+					return err
+				} else if canceled {
+					return nil
+				}
+				now := util.NowTimestamp()
+				if err := setFrontmatterField(prevStepPath, "time_finished", now); err != nil {
+					return err
+				}
+				if err := closeOpenFocusWindow(prevStepPath, now); err != nil {
+					return err
+				}
+			}
+			stepDir := filepath.Join(sessionDir, "step", step.Slug)
+			if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
+				return err
+			}
+			stepPath := filepath.Join(stepDir, "step.sg.md")
+			now := util.NowTimestamp()
+			fm := map[string]any{
+				"time_started": now,
+				"focus_windows": []map[string]any{
+					{"time_started": now},
+				},
+			}
+			if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
+				return err
+			}
+		prevStepPath = stepPath
+		fmt.Printf("started step %d/%d: %s\n", i+1, len(protocol.Steps), step.Name)
+	}
 		if prevStepPath != "" {
-			if _, canceled, err := runSelect("Advance to next step", []string{"Continue", "Cancel"}); err != nil {
+			if _, canceled, err := runSelect("Finish session?", []string{"Finish", "Cancel"}); err != nil {
 				return err
 			} else if canceled {
 				return nil
 			}
-			if err := setFrontmatterField(prevStepPath, "time_finished", util.NowTimestamp()); err != nil {
+			now := util.NowTimestamp()
+			if err := setFrontmatterField(prevStepPath, "time_finished", now); err != nil {
+				return err
+			}
+			if err := closeOpenFocusWindow(prevStepPath, now); err != nil {
 				return err
 			}
 		}
-		stepDir := filepath.Join(sessionDir, "step", step.Slug)
-		if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
-			return err
-		}
-		stepPath := filepath.Join(stepDir, "step.sg.md")
-		fm := map[string]any{
-			"time_started": util.NowTimestamp(),
-		}
-		if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
-			return err
-		}
-		prevStepPath = stepPath
-		fmt.Printf("started step %d/%d: %s\n", i+1, len(protocol.Steps), step.Name)
-	}
-	if prevStepPath != "" {
-		if _, canceled, err := runSelect("Finish session?", []string{"Finish", "Cancel"}); err != nil {
-			return err
-		} else if canceled {
-			return nil
-		}
-		if err := setFrontmatterField(prevStepPath, "time_finished", util.NowTimestamp()); err != nil {
-			return err
-		}
-	}
 	fmt.Println("session complete:", sessionDir)
 	return nil
 }
@@ -673,12 +685,15 @@ func cmdDataLs() error {
 		if len(parts) < 5 {
 			return nil
 		}
-		if parts[1] != "step" || parts[3] != "asset" {
-			return nil
-		}
-		rows = append(rows, dataAssetRow{
-			Session: parts[0],
-			Step:    parts[2],
+			if parts[1] != "step" || parts[3] != "asset" {
+				return nil
+			}
+			if strings.EqualFold(filepath.Base(path), ".DS_Store") {
+				return nil
+			}
+			rows = append(rows, dataAssetRow{
+				Session: parts[0],
+				Step:    parts[2],
 			File:    strings.Join(parts[4:], "/"),
 		})
 		return nil
@@ -1179,6 +1194,11 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 		return sessionAdvanceResult{}, errors.New("session already finished")
 	}
 	now := util.NowTimestamp()
+	focusedSlug, err := readStudyActiveSessionSlug(root)
+	if err != nil {
+		return sessionAdvanceResult{}, err
+	}
+	isFocused := strings.TrimSpace(focusedSlug) == sessionSlug
 	switch progress.NextAction {
 	case "start":
 		target := 0
@@ -1188,7 +1208,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 		if err := startSessionStep(sessionDir, protocol.Steps[target], now); err != nil {
 			return sessionAdvanceResult{}, err
 		}
-		return sessionAdvanceResult{State: "started", StepSlug: protocol.Steps[target].Slug}, nil
+			if isFocused {
+				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+					return sessionAdvanceResult{}, err
+				}
+			}
+			return sessionAdvanceResult{State: "started", StepSlug: protocol.Steps[target].Slug}, nil
 	case "advance":
 		if progress.ActiveStepIdx < 0 || progress.ActiveStepIdx >= len(protocol.Steps)-1 {
 			return sessionAdvanceResult{}, errors.New("cannot advance: no active step")
@@ -1201,7 +1226,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 		if err := startSessionStep(sessionDir, next, now); err != nil {
 			return sessionAdvanceResult{}, err
 		}
-		return sessionAdvanceResult{State: "advanced", StepSlug: next.Slug}, nil
+			if isFocused {
+				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+					return sessionAdvanceResult{}, err
+				}
+			}
+			return sessionAdvanceResult{State: "advanced", StepSlug: next.Slug}, nil
 	case "finish":
 		if progress.ActiveStepIdx >= 0 {
 			active := protocol.Steps[progress.ActiveStepIdx]
@@ -1210,7 +1240,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 			}
 		}
 		lastStep := protocol.Steps[len(protocol.Steps)-1]
-		return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
+			if isFocused {
+				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+					return sessionAdvanceResult{}, err
+				}
+			}
+			return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
 	default:
 		return sessionAdvanceResult{}, fmt.Errorf("session cannot transition from current state")
 	}
@@ -1236,6 +1271,16 @@ func reverseSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 	active := protocol.Steps[progress.ActiveStepIdx]
 	if err := clearSessionStepStart(sessionDir, active.Slug); err != nil {
 		return sessionAdvanceResult{}, err
+	}
+	now := util.NowTimestamp()
+	focusedSlug, err := readStudyActiveSessionSlug(root)
+	if err != nil {
+		return sessionAdvanceResult{}, err
+	}
+	if strings.TrimSpace(focusedSlug) == sessionSlug {
+		if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+			return sessionAdvanceResult{}, err
+		}
 	}
 	return sessionAdvanceResult{State: "reversed", StepSlug: active.Slug}, nil
 }
@@ -1272,6 +1317,21 @@ func finishSessionStep(sessionDir, stepSlug, now string) error {
 		return fmt.Errorf("cannot finish step without time_started: %s", stepSlug)
 	}
 	fm["time_finished"] = now
+	if windows := decodeFocusWindows(fm["focus_windows"]); len(windows) > 0 {
+		last := windows[len(windows)-1]
+		if strings.TrimSpace(last.TimeFinished) == "" {
+			if strings.TrimSpace(last.TimeStarted) != "" {
+				if endTS, closeErr := clampFocusWindowEnd(last.TimeStarted, now); closeErr == nil {
+					windows[len(windows)-1].TimeFinished = endTS
+				} else {
+					windows[len(windows)-1].TimeFinished = now
+				}
+			} else {
+				windows[len(windows)-1].TimeFinished = now
+			}
+			fm["focus_windows"] = encodeFocusWindows(windows)
+		}
+	}
 	return util.WriteFrontmatterFile(stepPath, fm, body)
 }
 
@@ -1283,7 +1343,166 @@ func clearSessionStepStart(sessionDir, stepSlug string) error {
 	}
 	delete(fm, "time_started")
 	delete(fm, "time_finished")
+	delete(fm, "focus_windows")
 	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+type focusWindow struct {
+	TimeStarted  string `yaml:"time_started"`
+	TimeFinished string `yaml:"time_finished,omitempty"`
+}
+
+func decodeFocusWindows(v any) []focusWindow {
+	rawList, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]focusWindow, 0, len(rawList))
+	for _, item := range rawList {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		started := strings.TrimSpace(asString(m["time_started"]))
+		finished := strings.TrimSpace(asString(m["time_finished"]))
+		if started == "" {
+			continue
+		}
+		out = append(out, focusWindow{TimeStarted: started, TimeFinished: finished})
+	}
+	return out
+}
+
+func encodeFocusWindows(windows []focusWindow) []map[string]any {
+	out := make([]map[string]any, 0, len(windows))
+	for _, w := range windows {
+		row := map[string]any{"time_started": w.TimeStarted}
+		if strings.TrimSpace(w.TimeFinished) != "" {
+			row["time_finished"] = w.TimeFinished
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func openFocusWindow(stepPath, now string) error {
+	fm, body, err := util.ReadFrontmatterFile(stepPath)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(asString(fm["time_started"])) == "" {
+		return nil
+	}
+	windows := decodeFocusWindows(fm["focus_windows"])
+	if len(windows) > 0 {
+		last := windows[len(windows)-1]
+		if strings.TrimSpace(last.TimeFinished) == "" {
+			return nil
+		}
+	}
+	windows = append(windows, focusWindow{TimeStarted: now})
+	fm["focus_windows"] = encodeFocusWindows(windows)
+	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+func closeOpenFocusWindow(stepPath, now string) error {
+	fm, body, err := util.ReadFrontmatterFile(stepPath)
+	if err != nil {
+		return err
+	}
+	windows := decodeFocusWindows(fm["focus_windows"])
+	if len(windows) == 0 {
+		return nil
+	}
+	last := windows[len(windows)-1]
+	if strings.TrimSpace(last.TimeFinished) != "" {
+		return nil
+	}
+	endTS, err := clampFocusWindowEnd(last.TimeStarted, now)
+	if err != nil {
+		return err
+	}
+	windows[len(windows)-1].TimeFinished = endTS
+	fm["focus_windows"] = encodeFocusWindows(windows)
+	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+func clampFocusWindowEnd(startTS, endTS string) (string, error) {
+	start, err := util.ParseTimestamp(startTS)
+	if err != nil {
+		return "", fmt.Errorf("invalid focus window time_started: %s", startTS)
+	}
+	end, err := util.ParseTimestamp(endTS)
+	if err != nil {
+		return "", fmt.Errorf("invalid focus window time_finished: %s", endTS)
+	}
+	if end.Before(start) {
+		return startTS, nil
+	}
+	return endTS, nil
+}
+
+func syncFocusedSessionWindows(root, sessionSlug string, protocol store.Protocol, now string) error {
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	progress, err := inspectSessionProgress(sessionDir, protocol)
+	if err != nil {
+		return err
+	}
+	activeSlug := ""
+	if progress.ActiveStepIdx >= 0 && progress.ActiveStepIdx < len(protocol.Steps) {
+		activeSlug = protocol.Steps[progress.ActiveStepIdx].Slug
+	}
+	for _, st := range protocol.Steps {
+		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+		if _, err := os.Stat(stepPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if st.Slug == activeSlug {
+			if err := openFocusWindow(stepPath, now); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := closeOpenFocusWindow(stepPath, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func closeFocusedSessionWindows(root, sessionSlug string, protocol store.Protocol, now string) error {
+	if strings.TrimSpace(sessionSlug) == "" {
+		return nil
+	}
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	for _, st := range protocol.Steps {
+		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+		if _, err := os.Stat(stepPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := closeOpenFocusWindow(stepPath, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readStudyActiveSessionSlug(root string) (string, error) {
+	studyPath := filepath.Join(root, "study.sg.md")
+	fm, _, err := util.ReadFrontmatterFile(studyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(asString(fm["active_session_slug"])), nil
 }
 
 func createSessionScaffold(root string, selected []store.Subject) (string, string, error) {
@@ -2410,6 +2629,7 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 	starts := make([]time.Time, len(protocol.Steps))
 	finishes := make([]time.Time, len(protocol.Steps))
 	hasExplicitFinish := make([]bool, len(protocol.Steps))
+	stepFocusWindows := make([][]focusWindow, len(protocol.Steps))
 	for i, st := range protocol.Steps {
 		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
 		fm, _, err := util.ReadFrontmatterFile(stepPath)
@@ -2433,6 +2653,11 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 			finishes[i] = ft
 			hasExplicitFinish[i] = true
 		}
+		windows := decodeFocusWindows(fm["focus_windows"])
+		if len(windows) == 0 {
+			return nil, fmt.Errorf("step missing focus_windows: %s", stepPath)
+		}
+		stepFocusWindows[i] = windows
 	}
 	last := len(protocol.Steps) - 1
 	if finishes[last].IsZero() {
@@ -2447,10 +2672,37 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 
 	windows := make([]stepWindow, 0, len(protocol.Steps))
 	for i, st := range protocol.Steps {
-		w := stepWindow{StepSlug: st.Slug, Start: starts[i], Last: i == last}
-		w.End = finishes[i]
-		windows = append(windows, w)
+		for _, fw := range stepFocusWindows[i] {
+			fwStart, err := util.ParseTimestamp(fw.TimeStarted)
+			if err != nil {
+				return nil, fmt.Errorf("invalid focus_windows.time_started for step %s", st.Slug)
+			}
+			if strings.TrimSpace(fw.TimeFinished) == "" {
+				return nil, fmt.Errorf("open focus_windows interval for step %s", st.Slug)
+			}
+			fwEnd, err := util.ParseTimestamp(fw.TimeFinished)
+			if err != nil {
+				return nil, fmt.Errorf("invalid focus_windows.time_finished for step %s", st.Slug)
+			}
+			if fwEnd.Before(fwStart) {
+				return nil, fmt.Errorf("focus_windows interval ends before it starts for step %s", st.Slug)
+			}
+			if fwStart.Before(starts[i]) || fwEnd.After(finishes[i]) {
+				return nil, fmt.Errorf("focus_windows interval is outside step envelope for step %s", st.Slug)
+			}
+			w := stepWindow{StepSlug: st.Slug, Start: fwStart, End: fwEnd, Last: i == last}
+			windows = append(windows, w)
+		}
 	}
+	sort.SliceStable(windows, func(i, j int) bool {
+		if windows[i].Start.Equal(windows[j].Start) {
+			if windows[i].End.Equal(windows[j].End) {
+				return windows[i].StepSlug < windows[j].StepSlug
+			}
+			return windows[i].End.Before(windows[j].End)
+		}
+		return windows[i].Start.Before(windows[j].Start)
+	})
 	return windows, nil
 }
 

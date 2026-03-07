@@ -343,18 +343,25 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 	switch entry.kind {
 	case browseEntryEmpty:
 		return m, nil
-	case browseEntrySession:
-		rec := entry.record
-		if rec.NextAction == "invalid" {
-			m.message = "invalid: " + rec.InvalidReason
-			return m, nil
-		}
-		if m.actionCursor == sessionActionCursorFocus {
-			if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
-				m.message = "focus failed: " + err.Error()
+		case browseEntrySession:
+			rec := entry.record
+			if rec.NextAction == "invalid" {
+				m.message = "invalid: " + rec.InvalidReason
 				return m, nil
 			}
-			if rec.NextAction == "start" && rec.ProgressSteps == 0 {
+			if m.actionCursor == sessionActionCursorFocus {
+				now := util.NowTimestamp()
+				if strings.TrimSpace(m.activeSessionSlug) != "" && m.activeSessionSlug != rec.Slug {
+					if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
+						m.message = "focus failed: " + err.Error()
+						return m, nil
+					}
+				}
+				if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
+					m.message = "focus failed: " + err.Error()
+					return m, nil
+				}
+				if rec.NextAction == "start" && rec.ProgressSteps == 0 {
 				res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
 				if err != nil {
 					m.message = "focus failed: " + err.Error()
@@ -364,13 +371,17 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 					m.err = err
 					return m, tea.Quit
 				}
-				m.message = fmt.Sprintf("session=%s state=focused+%s step=%s", rec.Slug, res.State, res.StepSlug)
-				return m, nil
-			}
-			if err := m.refreshBrowseList(); err != nil {
-				m.err = err
-				return m, tea.Quit
-			}
+					m.message = fmt.Sprintf("session=%s state=focused+%s step=%s", rec.Slug, res.State, res.StepSlug)
+					return m, nil
+				}
+				if err := syncFocusedSessionWindows(m.root, rec.Slug, m.protocol, now); err != nil {
+					m.message = "focus failed: " + err.Error()
+					return m, nil
+				}
+				if err := m.refreshBrowseList(); err != nil {
+					m.err = err
+					return m, tea.Quit
+				}
 			m.message = fmt.Sprintf("session=%s state=focused", rec.Slug)
 			return m, nil
 		}

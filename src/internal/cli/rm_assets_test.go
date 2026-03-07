@@ -13,6 +13,7 @@ func TestCmdRmAssets_RemovesAllStepAssetsAndKeepsMetadata(t *testing.T) {
 	studyRoot := filepath.Join(tmp, "study")
 	sessionSlug := "18-02-2026-boehmer"
 	seedStudyForRmAssetsTest(t, studyRoot, sessionSlug)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 
 	assetsDir, err := filepath.Abs(filepath.Join("testdata", "ingest-assets"))
 	if err != nil {

@@ -176,6 +176,13 @@ Optional for non-final protocol steps:
 - `time_finished`
   - if omitted, implied value is `next_step.time_started - 1 second`
 
+Optional frontmatter:
+- `focus_windows` (array of `{time_started, time_finished}` pairs)
+  - records the periods when this step was focused in `sg sessions`
+  - each entry must use the standard timestamp format (`HH:MM:SS DD-MM-YYYY`)
+  - `time_finished` may be omitted only while the step is currently focused; it must be present for closed/completed sessions
+  - ingestion ownership uses `focus_windows` only (no fallback to step-envelope ownership)
+
 Optional markdown body:
 - free-form notes
 
@@ -266,6 +273,9 @@ Behavior:
 7. Press `Enter` to execute the action under the active action cursor:
 - `FOCUSED`: mark that session as the single focused session in study frontmatter (`study.sg.md` key `active_session_slug`); if the session has not started any protocol step yet, also auto-start its first step
 - `NEXT`: perform exactly one timing transition (`start`, `advance`, or `finish`) based on current session progress
+   Focus tracking contract:
+   - switching focus closes the previous focused session's open `focus_windows` interval (if any active step exists) and opens a new interval on the newly focused session's active step (if any)
+   - when a focused session advances/reverses/finishes, `focus_windows` follow the active step so there is never more than one open focus interval per session
 8. Press `Esc` to quit browse view.
 9. Includes an action to create a new session without leaving the switchboard.
 10. The session list view uses compact single-line rows (no blank description line).
@@ -367,6 +377,10 @@ Step windows:
 - non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
 
+Ownership windows:
+- ingest matches assets to `focus_windows` intervals (per entry) for each step
+- if any step is missing `focus_windows`, or has an open/invalid `focus_windows` interval, ingestion fails with a clear session-scoped error
+
 Rules:
 - requires all step `time_started`; requires `time_finished` on last step
 - deterministic output filename: `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`
@@ -381,6 +395,7 @@ Behavior:
 - non-interactive
 - scans all sessions under `<study-root>/session/`
 - prints one row per asset with columns `SESSION | STEP | FILE`
+- ignores filesystem metadata files in asset directories (for example `.DS_Store`)
 - rows are sorted by `SESSION`, then `STEP`, then `FILE`
 - prints aggregate summary line with total assets
 
@@ -488,6 +503,7 @@ All criteria below are pass/fail requirements for v1.
 8. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
 11. In `sg sessions`, `Enter` executes the currently focused action cell: `FOCUSED` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
+11a. `sg sessions` records focus ownership per step via `focus_windows` in step frontmatter; focus switches close the previous focused interval and open the next focused interval.
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
 13. `sg session advance` works from within a session directory without requiring `cd` to other sessions.
 14. `sg session advance --session <slug>` advances a specific session from study root (or any path within the study).
@@ -518,6 +534,7 @@ All criteria below are pass/fail requirements for v1.
 6. Time-window matching rule is enforced:
 - non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
+   Effective ownership for ingest uses `focus_windows` only; there is no ownership fallback to whole-step time windows.
 7. Assets are copied to the correct `step/<step-slug>/asset/` directory.
 8. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
 9. Duplicate files are skipped based on content identity within each session.
@@ -527,6 +544,10 @@ All criteria below are pass/fail requirements for v1.
 12. `sg data ingest --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
     The canonical fixture directory for that asset set is `fixtures/study-complete-assets/`.
 13. `sg data ls` outputs one sorted row per ingested asset (`SESSION | STEP | FILE`) and an aggregate asset total.
+14. The repository concurrent-ingest fixture keeps study state and source media separate:
+- study fixture: `fixtures/four-concurrently/` (session step `asset/` dirs empty before ingest)
+- source media fixture: `fixtures/four-concurrently-data/`
+- each source photo embeds metadata describing expected destination (`subject`, `step`) so tests can assert ingestion placement by metadata, not only by filename.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.

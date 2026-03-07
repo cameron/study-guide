@@ -586,6 +586,86 @@ func TestSessionsUI_EnterOnNextStepAdvancesOnce(t *testing.T) {
 	}
 }
 
+func TestSessionsUI_FocusSwitch_ClosesPreviousWindowAndOpensNewWindow(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\nactive_session_slug: s1\n---\n\n# Study\n")
+	mustWriteSessionFile(t, root, "s1", map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteSessionFile(t, root, "s2", map[string]any{
+		"subject_ids": []string{"sub-2"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", "s1", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:01:00 01-01-2026"},
+		},
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", "s2", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:02:00 01-01-2026",
+	}, "")
+
+	m := sessionsSwitchboardModel{
+		root:              root,
+		protocol:          protocol,
+		view:              sessionsViewBrowse,
+		actionCursor:      sessionActionCursorFocus,
+		activeSessionSlug: "s1",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 1},
+				{Title: "SUBJECT", Width: 1},
+				{Title: "FOCUSED", Width: 1},
+				{Title: "STEP", Width: 1},
+				{Title: "NEXT", Width: 1},
+			}),
+			table.WithRows([]table.Row{{"s2", "", "", "", ""}}),
+		),
+		browseEntries: []browseEntry{
+			{
+				kind: browseEntrySession,
+				record: sessionRecord{
+					Slug:          "s2",
+					NextAction:    "advance",
+					ProgressSteps: 1,
+				},
+			},
+		},
+	}
+
+	_, _ = m.handleBrowseEnter()
+
+	s1FM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", "s1", "step", "first-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read s1 step failed: %v", err)
+	}
+	s1Windows := focusWindowsFromFM(s1FM)
+	if len(s1Windows) != 1 {
+		t.Fatalf("expected 1 focus window for s1, got %d", len(s1Windows))
+	}
+	if strings.TrimSpace(asString(s1Windows[0]["time_finished"])) == "" {
+		t.Fatalf("expected s1 focus window to be closed after switching focus")
+	}
+
+	s2FM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", "s2", "step", "first-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read s2 step failed: %v", err)
+	}
+	s2Windows := focusWindowsFromFM(s2FM)
+	if len(s2Windows) != 1 {
+		t.Fatalf("expected 1 focus window for s2, got %d", len(s2Windows))
+	}
+	if strings.TrimSpace(asString(s2Windows[0]["time_started"])) == "" {
+		t.Fatalf("expected s2 focus window to be opened on focus")
+	}
+	if strings.TrimSpace(asString(s2Windows[0]["time_finished"])) != "" {
+		t.Fatalf("expected s2 focus window to remain open while focused")
+	}
+}
+
 func TestSessionsUI_CtrlBReversesSelectedSessionStep(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
@@ -842,4 +922,24 @@ func assertSingleFocusedActionCell(t *testing.T, activeCell, stepCell, nextCell 
 			nextPlain,
 		)
 	}
+}
+
+func focusWindowsFromFM(fm map[string]any) []map[string]any {
+	raw, ok := fm["focus_windows"]
+	if !ok {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }

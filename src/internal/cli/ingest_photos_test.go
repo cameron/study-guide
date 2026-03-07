@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -25,13 +26,22 @@ func TestLoadStepWindows_UsesProtocolOrderAndWindowRules(t *testing.T) {
 
 	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
 		"time_started": "10:00:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:00:00 01-01-2026", "time_finished": "10:04:59 01-01-2026"},
+		},
 	}, "# A\n")
 	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "b", "step.sg.md"), map[string]any{
 		"time_started": "10:05:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:05:00 01-01-2026", "time_finished": "10:08:59 01-01-2026"},
+		},
 	}, "# B\n")
 	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "c", "step.sg.md"), map[string]any{
 		"time_started":  "10:09:00 01-01-2026",
 		"time_finished": "10:15:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:09:00 01-01-2026", "time_finished": "10:15:00 01-01-2026"},
+		},
 	}, "# C\n")
 
 	windows, err := loadStepWindows(sessionDir, protocol)
@@ -61,6 +71,73 @@ func TestLoadStepWindows_UsesProtocolOrderAndWindowRules(t *testing.T) {
 	}
 }
 
+func TestLoadStepWindows_UsesFocusWindowsForOwnership(t *testing.T) {
+	tmp := t.TempDir()
+	sessionDir := filepath.Join(tmp, "session", "s1")
+	protocol := store.Protocol{Steps: []store.ProtocolStep{
+		{Name: "A", Slug: "a"},
+		{Name: "B", Slug: "b"},
+	}}
+
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:04:59 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:00:00 01-01-2026", "time_finished": "10:01:00 01-01-2026"},
+			{"time_started": "10:03:00 01-01-2026", "time_finished": "10:04:59 01-01-2026"},
+		},
+	}, "# A\n")
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "b", "step.sg.md"), map[string]any{
+		"time_started":  "10:05:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:05:00 01-01-2026", "time_finished": "10:10:00 01-01-2026"},
+		},
+	}, "# B\n")
+
+	windows, err := loadStepWindows(sessionDir, protocol)
+	if err != nil {
+		t.Fatalf("loadStepWindows returned error: %v", err)
+	}
+	if len(windows) != 3 {
+		t.Fatalf("expected 3 ownership windows from focus_windows, got %d", len(windows))
+	}
+	assertTimeEqual(t, windows[0].Start, "10:00:00 01-01-2026")
+	assertTimeEqual(t, windows[0].End, "10:01:00 01-01-2026")
+	if windows[0].StepSlug != "a" {
+		t.Fatalf("expected first focus window to map to step a, got %q", windows[0].StepSlug)
+	}
+	assertTimeEqual(t, windows[1].Start, "10:03:00 01-01-2026")
+	assertTimeEqual(t, windows[1].End, "10:04:59 01-01-2026")
+	if windows[1].StepSlug != "a" {
+		t.Fatalf("expected second focus window to map to step a, got %q", windows[1].StepSlug)
+	}
+	assertTimeEqual(t, windows[2].Start, "10:05:00 01-01-2026")
+	assertTimeEqual(t, windows[2].End, "10:10:00 01-01-2026")
+	if windows[2].StepSlug != "b" {
+		t.Fatalf("expected third focus window to map to step b, got %q", windows[2].StepSlug)
+	}
+}
+
+func TestLoadStepWindows_RequiresFocusWindows(t *testing.T) {
+	tmp := t.TempDir()
+	sessionDir := filepath.Join(tmp, "session", "s1")
+	protocol := store.Protocol{Steps: []store.ProtocolStep{{Name: "A", Slug: "a"}}}
+
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+	}, "# A\n")
+
+	_, err := loadStepWindows(sessionDir, protocol)
+	if err == nil {
+		t.Fatalf("expected error for missing focus_windows")
+	}
+	if !strings.Contains(err.Error(), "focus_windows") {
+		t.Fatalf("expected focus_windows error, got: %v", err)
+	}
+}
+
 func TestLoadStepWindows_RequiresTimeFields(t *testing.T) {
 	t.Run("missing started", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -82,6 +159,9 @@ func TestLoadStepWindows_RequiresTimeFields(t *testing.T) {
 
 		mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
 			"time_started": "10:00:00 01-01-2026",
+			"focus_windows": []map[string]any{
+				{"time_started": "10:00:00 01-01-2026", "time_finished": "10:00:30 01-01-2026"},
+			},
 		}, "# A\n")
 
 		_, err := loadStepWindows(sessionDir, protocol)
@@ -166,6 +246,7 @@ func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 
 	sessionA := "18-02-2026-boehmer"
 
@@ -221,6 +302,7 @@ func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-complete"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 
 	sessionSlug := "18-02-2026-boehmer"
 	stepRoot := filepath.Join(studyRoot, "session", sessionSlug, "step")
@@ -279,10 +361,86 @@ func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 	assertAssetCount(t, studyRoot, sessionSlug, 7)
 }
 
+func TestCmdIngestPhotos_FourConcurrentlyFixture_UsesEmbeddedSubjectStepMetadata(t *testing.T) {
+	if _, err := exec.LookPath("exiftool"); err != nil {
+		t.Skip("exiftool not available")
+	}
+
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "four-concurrently"), studyRoot)
+
+	preCount := countIngestedAssetsInStudy(t, studyRoot)
+	if preCount != 0 {
+		t.Fatalf("fixture precondition failed: expected zero pre-ingested assets, got %d", preCount)
+	}
+
+	assetsDir, err := filepath.Abs(filepath.Join("..", "..", "..", "fixtures", "four-concurrently-data"))
+	if err != nil {
+		t.Fatalf("Abs assets dir error: %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+		t.Fatalf("cmdIngestPhotos error: %v", err)
+	}
+
+	postCount := countIngestedAssetsInStudy(t, studyRoot)
+	if postCount != 16 {
+		t.Fatalf("expected 16 ingested assets, got %d", postCount)
+	}
+
+	sessionRoot := filepath.Join(studyRoot, "session")
+	err = filepath.WalkDir(sessionRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.Contains(path, string(filepath.Separator)+"asset"+string(filepath.Separator)) {
+			return nil
+		}
+		if strings.EqualFold(filepath.Base(path), ".DS_Store") {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(path), "/")
+		if len(parts) < 5 {
+			return nil
+		}
+		n := len(parts)
+		sessionSlug := parts[n-5]
+		stepSlug := parts[n-3]
+		subject, step, err := readEmbeddedFixtureSubjectStep(path)
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(sessionSlug, "-"+subject) {
+			return errors.New("embedded subject does not match destination session for " + path)
+		}
+		if step != stepSlug {
+			return errors.New("embedded step does not match destination step for " + path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("embedded metadata validation failed: %v", err)
+	}
+}
+
 func TestCmdIngestPhotos_ParsesExifOncePerSourceAcrossSessions(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 	mustCopyDir(
 		t,
 		filepath.Join(studyRoot, "session", "18-02-2026-boehmer"),
@@ -347,6 +505,7 @@ func TestCmdIngestPhotos_DefaultMode_UsesConfiguredPhotosLibraryPath(t *testing.
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 	sessionA := "18-02-2026-boehmer"
 
 	photosDir := filepath.Join(tmp, "photos-library-feed")
@@ -472,6 +631,7 @@ func TestCmdIngestPhotos_DefaultMode_UsesSQLiteAssetDiscoveryWhenDatabaseExists(
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
 	sessionA := "18-02-2026-boehmer"
 
 	libraryRoot := filepath.Join(tmp, "Photos Library.photoslibrary")
@@ -790,6 +950,83 @@ func assertTimeEqual(t *testing.T, got time.Time, wantRaw string) {
 	}
 }
 
+func mustPopulateFocusWindowsFromStepTimes(t *testing.T, studyRoot string) {
+	t.Helper()
+	protocol, err := store.ParseProtocol(studyRoot)
+	if err != nil {
+		t.Fatalf("ParseProtocol error: %v", err)
+	}
+	sessions, err := listSessionSlugs(studyRoot)
+	if err != nil {
+		t.Fatalf("listSessionSlugs error: %v", err)
+	}
+	for _, slug := range sessions {
+		sessionDir := filepath.Join(studyRoot, "session", slug)
+		starts := make([]time.Time, len(protocol.Steps))
+		finishes := make([]time.Time, len(protocol.Steps))
+		stepFiles := make([]string, len(protocol.Steps))
+		for i, st := range protocol.Steps {
+			stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+			stepFiles[i] = stepPath
+			fm, _, err := util.ReadFrontmatterFile(stepPath)
+			if err != nil {
+				t.Fatalf("ReadFrontmatterFile %s error: %v", stepPath, err)
+			}
+			started := strings.TrimSpace(asString(fm["time_started"]))
+			if started == "" {
+				t.Fatalf("step missing time_started: %s", stepPath)
+			}
+			startTS, err := util.ParseTimestamp(started)
+			if err != nil {
+				t.Fatalf("ParseTimestamp started %s error: %v", stepPath, err)
+			}
+			starts[i] = startTS
+			finished := strings.TrimSpace(asString(fm["time_finished"]))
+			if finished != "" {
+				finishTS, err := util.ParseTimestamp(finished)
+				if err != nil {
+					t.Fatalf("ParseTimestamp finished %s error: %v", stepPath, err)
+				}
+				finishes[i] = finishTS
+			}
+		}
+		last := len(protocol.Steps) - 1
+		if finishes[last].IsZero() {
+			t.Fatalf("last step missing time_finished: %s", stepFiles[last])
+		}
+		if finishes[last].Before(starts[last]) {
+			finishes[last] = starts[last]
+		}
+		for i := 0; i < last; i++ {
+			if finishes[i].IsZero() || !finishes[i].Before(starts[i+1]) {
+				finishes[i] = starts[i+1].Add(-1 * time.Second)
+			}
+			if finishes[i].Before(starts[i]) {
+				finishes[i] = starts[i]
+			}
+		}
+		for i, st := range protocol.Steps {
+			stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
+			fm, body, err := util.ReadFrontmatterFile(stepPath)
+			if err != nil {
+				t.Fatalf("ReadFrontmatterFile %s error: %v", stepPath, err)
+			}
+			fm["focus_windows"] = []map[string]any{
+				{
+					"time_started":  starts[i].Format(util.TimestampLayout),
+					"time_finished": finishes[i].Format(util.TimestampLayout),
+				},
+			}
+			if i == last {
+				fm["time_finished"] = finishes[i].Format(util.TimestampLayout)
+			}
+			if err := util.WriteFrontmatterFile(stepPath, fm, body); err != nil {
+				t.Fatalf("WriteFrontmatterFile %s error: %v", stepPath, err)
+			}
+		}
+	}
+}
+
 func mustCopyDir(t *testing.T, srcRoot, dstRoot string) {
 	t.Helper()
 	err := filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, err error) error {
@@ -813,6 +1050,51 @@ func mustCopyDir(t *testing.T, srcRoot, dstRoot string) {
 	if err != nil {
 		t.Fatalf("copy dir %s -> %s failed: %v", srcRoot, dstRoot, err)
 	}
+}
+
+func countIngestedAssetsInStudy(t *testing.T, studyRoot string) int {
+	t.Helper()
+	sessionRoot := filepath.Join(studyRoot, "session")
+	count := 0
+	err := filepath.WalkDir(sessionRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.Contains(path, string(filepath.Separator)+"asset"+string(filepath.Separator)) && !strings.EqualFold(filepath.Base(path), ".DS_Store") {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk assets failed: %v", err)
+	}
+	return count
+}
+
+func readEmbeddedFixtureSubjectStep(path string) (string, string, error) {
+	cmd := exec.Command("exiftool", "-s3", "-ImageDescription", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", err
+	}
+	desc := strings.TrimSpace(string(out))
+	const prefix = "sg_subject="
+	if !strings.HasPrefix(desc, prefix) || !strings.Contains(desc, ";sg_step=") {
+		return "", "", errors.New("invalid embedded fixture metadata in " + path)
+	}
+	chunks := strings.SplitN(strings.TrimPrefix(desc, prefix), ";sg_step=", 2)
+	if len(chunks) != 2 {
+		return "", "", errors.New("invalid embedded fixture metadata in " + path)
+	}
+	subject := strings.TrimSpace(chunks[0])
+	step := strings.TrimSpace(chunks[1])
+	if subject == "" || step == "" {
+		return "", "", errors.New("empty embedded fixture metadata in " + path)
+	}
+	return subject, step, nil
 }
 
 func assertAssetCount(t *testing.T, studyRoot, sessionSlug string, want int) {
