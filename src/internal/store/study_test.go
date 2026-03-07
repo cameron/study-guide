@@ -1,6 +1,8 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -113,5 +115,53 @@ func TestExtractStudyTitle(t *testing.T) {
 	body := "# Study Title\n\n# Hypotheses\n"
 	if got := ExtractStudyTitle(body); got != "Study Title" {
 		t.Fatalf("unexpected title: %q", got)
+	}
+}
+
+func TestReadSubjectRequirements_LoadsRequiredAndFixedFields(t *testing.T) {
+	root := t.TempDir()
+	raw := "" +
+		"type: person\n" +
+		"favorite_color: green\n" +
+		"required_fields:\n" +
+		"  - name\n" +
+		"  - favorite_color\n"
+	if err := os.WriteFile(filepath.Join(root, "subject-requirements.yaml"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write requirements failed: %v", err)
+	}
+
+	req, err := ReadSubjectRequirements(root)
+	if err != nil {
+		t.Fatalf("ReadSubjectRequirements returned error: %v", err)
+	}
+	if len(req.RequiredFields) != 2 || req.RequiredFields[0] != "name" || req.RequiredFields[1] != "favorite_color" {
+		t.Fatalf("unexpected required fields: %#v", req.RequiredFields)
+	}
+	if got := req.FixedFields["type"]; got != "person" {
+		t.Fatalf("expected fixed type=person, got %q", got)
+	}
+	if got := req.FixedFields["favorite_color"]; got != "green" {
+		t.Fatalf("expected fixed favorite_color=green, got %q", got)
+	}
+}
+
+func TestReadSubjectRequirements_LoadsCompactFixedFields(t *testing.T) {
+	root := t.TempDir()
+	raw := "" +
+		"type:person\n" +
+		"favorite_color:green\n"
+	if err := os.WriteFile(filepath.Join(root, "subject-requirements.yaml"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write requirements failed: %v", err)
+	}
+
+	req, err := ReadSubjectRequirements(root)
+	if err != nil {
+		t.Fatalf("ReadSubjectRequirements returned error: %v", err)
+	}
+	if got := req.FixedFields["type"]; got != "person" {
+		t.Fatalf("expected fixed type=person, got %q", got)
+	}
+	if got := req.FixedFields["favorite_color"]; got != "green" {
+		t.Fatalf("expected fixed favorite_color=green, got %q", got)
 	}
 }

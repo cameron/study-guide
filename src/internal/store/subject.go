@@ -22,10 +22,11 @@ type Subject struct {
 	CreatedOn string
 	UpdatedOn string
 	Path      string
+	Extra     map[string]string
 }
 
 func SubjectFromFM(path string, fm map[string]any, body string) Subject {
-	s := Subject{Path: path}
+	s := Subject{Path: path, Extra: map[string]string{}}
 	s.UUID = asString(fm["uuid"])
 	s.Type = asString(fm["type"])
 	s.Name = asString(fm["name"])
@@ -36,14 +37,42 @@ func SubjectFromFM(path string, fm map[string]any, body string) Subject {
 	s.CreatedOn = asString(fm["created_on"])
 	s.UpdatedOn = asString(fm["updated_on"])
 	s.Notes = extractNotes(body)
+	known := map[string]bool{
+		"uuid":       true,
+		"type":       true,
+		"name":       true,
+		"email":      true,
+		"phone":      true,
+		"age":        true,
+		"sex":        true,
+		"created_on": true,
+		"updated_on": true,
+	}
+	for k, v := range fm {
+		if known[k] {
+			continue
+		}
+		if val := strings.TrimSpace(asAnyString(v)); val != "" {
+			s.Extra[k] = val
+		}
+	}
 	return s
 }
 
 func (s Subject) Frontmatter() map[string]any {
+	if s.Extra == nil {
+		s.Extra = map[string]string{}
+	}
 	fm := map[string]any{
 		"uuid": s.UUID,
 		"type": s.Type,
 		"name": s.Name,
+	}
+	for k, v := range s.Extra {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		fm[k] = v
 	}
 	if s.Email != "" {
 		fm["email"] = s.Email
@@ -171,6 +200,17 @@ func ResolveSubject(query string) (Subject, error) {
 func asString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func asAnyString(v any) string {
+	switch vv := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return vv
+	default:
+		return fmt.Sprint(vv)
+	}
 }
 
 func extractNotes(body string) string {

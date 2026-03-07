@@ -22,23 +22,86 @@ type ProtocolStep struct {
 	Description string
 }
 
-func ReadRequiredSubjectFields(studyRoot string) ([]string, error) {
+type SubjectRequirements struct {
+	RequiredFields []string
+	FixedFields    map[string]string
+}
+
+func ReadSubjectRequirements(studyRoot string) (SubjectRequirements, error) {
 	p := filepath.Join(studyRoot, "subject-requirements.yaml")
 	if _, err := os.Stat(p); err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return SubjectRequirements{FixedFields: map[string]string{}}, nil
+		}
+		return SubjectRequirements{}, err
 	}
 	raw, err := os.ReadFile(p)
 	if err != nil {
-		return nil, err
+		return SubjectRequirements{}, err
 	}
-	var cfg struct {
-		RequiredFields []string `yaml:"required_fields"`
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		compactDoc, compactErr := parseCompactFixedFields(raw)
+		if compactErr != nil {
+			return SubjectRequirements{}, err
+		}
+		doc = compactDoc
 	}
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+
+	req := SubjectRequirements{
+		RequiredFields: []string{},
+		FixedFields:    map[string]string{},
+	}
+	if arr, ok := doc["required_fields"].([]any); ok {
+		for _, v := range arr {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" {
+				req.RequiredFields = append(req.RequiredFields, s)
+			}
+		}
+	}
+	for k, v := range doc {
+		key := strings.TrimSpace(k)
+		if key == "" || key == "required_fields" {
+			continue
+		}
+		switch v.(type) {
+		case string, int, int64, float64, bool:
+			req.FixedFields[key] = strings.TrimSpace(fmt.Sprint(v))
+		}
+	}
+	return req, nil
+}
+
+func parseCompactFixedFields(raw []byte) (map[string]any, error) {
+	doc := map[string]any{}
+	lines := strings.Split(string(raw), "\n")
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid compact fixed-field line: %q", line)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			return nil, fmt.Errorf("invalid compact fixed-field key: %q", line)
+		}
+		doc[key] = value
+	}
+	return doc, nil
+}
+
+func ReadRequiredSubjectFields(studyRoot string) ([]string, error) {
+	req, err := ReadSubjectRequirements(studyRoot)
+	if err != nil {
 		return nil, err
 	}
 	var out []string
-	for _, s := range cfg.RequiredFields {
+	for _, s := range req.RequiredFields {
 		if strings.TrimSpace(s) != "" {
 			out = append(out, strings.TrimSpace(s))
 		}

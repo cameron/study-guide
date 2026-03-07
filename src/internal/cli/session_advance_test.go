@@ -113,6 +113,54 @@ func TestAdvanceSessionOnce_FinishesSessionAtFinalStep(t *testing.T) {
 	}
 }
 
+func TestReverseSessionOnce_ClearsCurrentStepAndAllowsRestart(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocol()
+	slug := "01-01-2026-theta"
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:01:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"), map[string]any{
+		"time_started": "10:02:00 01-01-2026",
+	}, "")
+
+	res, err := reverseSessionOnce(root, slug, protocol)
+	if err != nil {
+		t.Fatalf("reverseSessionOnce returned error: %v", err)
+	}
+	if res.State != "reversed" || res.StepSlug != "second-step" {
+		t.Fatalf("unexpected reverse result: %#v", res)
+	}
+
+	secondPath := filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md")
+	secondFM, _, err := util.ReadFrontmatterFile(secondPath)
+	if err != nil {
+		t.Fatalf("read second step failed: %v", err)
+	}
+	if strings.TrimSpace(asString(secondFM["time_started"])) != "" {
+		t.Fatalf("expected second step time_started cleared, got %q", asString(secondFM["time_started"]))
+	}
+
+	adv, err := advanceSessionOnce(root, slug, protocol)
+	if err != nil {
+		t.Fatalf("advanceSessionOnce after reverse returned error: %v", err)
+	}
+	if adv.State != "started" || adv.StepSlug != "second-step" {
+		t.Fatalf("unexpected advance result after reverse: %#v", adv)
+	}
+	secondFM, _, err = util.ReadFrontmatterFile(secondPath)
+	if err != nil {
+		t.Fatalf("read second step failed: %v", err)
+	}
+	if strings.TrimSpace(asString(secondFM["time_started"])) == "" {
+		t.Fatalf("expected second step to be started again")
+	}
+}
+
 func TestInferSessionSlugFromCwd(t *testing.T) {
 	root := t.TempDir()
 	slug := "01-01-2026-delta"

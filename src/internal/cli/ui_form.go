@@ -13,6 +13,7 @@ type formField struct {
 	Name     string
 	Label    string
 	Required bool
+	ReadOnly bool
 	Value    string
 }
 
@@ -34,6 +35,9 @@ func newFormModel(title string, fields []formField) formModel {
 		ti.Placeholder = f.Name
 		ti.SetValue(f.Value)
 		ti.Focus()
+		if f.ReadOnly {
+			ti.Blur()
+		}
 		if i != 0 {
 			ti.Blur()
 		}
@@ -90,6 +94,9 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	cmds := make([]tea.Cmd, len(m.inputs))
 	for i := range m.inputs {
+		if m.fields[i].ReadOnly {
+			continue
+		}
 		m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
 	}
 	return m, tea.Batch(cmds...)

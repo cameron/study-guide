@@ -139,7 +139,7 @@ func (m sessionCreatePickerModel) SelectedSubjects() []store.Subject {
 	return out
 }
 
-func runSessionCreatePicker() ([]store.Subject, bool, error) {
+func runSessionCreatePicker(studyRoot string) ([]store.Subject, bool, error) {
 	selectedBySubject := map[string]bool{}
 	for {
 		subs, err := store.ListSubjects()
@@ -156,7 +156,7 @@ func runSessionCreatePicker() ([]store.Subject, bool, error) {
 			return nil, true, nil
 		}
 		if out.requestCreateSubject {
-			if err := subjectCreate(); err != nil {
+			if err := subjectCreateWithStudyRoot(studyRoot); err != nil {
 				return nil, false, err
 			}
 			selectedBySubject = out.selectedBySubject

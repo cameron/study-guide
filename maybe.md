@@ -1,4 +1,4 @@
-- docs as in-directory dotfiles
+- docs (reference) via in-directory dotfiles
   - e.g., .protocol.sg.md has all available sections/formats with help text
 - protocol
   - support multiple formats

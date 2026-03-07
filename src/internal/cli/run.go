@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/table"
 	"github.com/go-pdf/fpdf"
 	"github.com/rwcarlsen/goexif/exif"
 	"gopkg.in/yaml.v3"
@@ -44,7 +45,7 @@ func Run(args []string) int {
 	case "session":
 		err = cmdSession(args[1:])
 	case "sessions":
-		err = cmdSessions()
+		err = cmdSessionsWithArgs(args[1:])
 	case "status":
 		err = cmdStatus(true)
 	case "publish":
@@ -105,8 +106,8 @@ func printHelp() {
 Commands:
   init
   subject create|edit|search|print|ls|rm
-  session [advance [--session <slug>]]
-  sessions
+  session [advance|reverse [--session <slug>]]
+  sessions [print]
   status
   publish
   ingest-photos
@@ -270,23 +271,15 @@ func cmdSubject(args []string) error {
 }
 
 func subjectCreate() error {
-	requiredMap := map[string]bool{"name": true}
-	if root, err := util.StudyRootFromCwd(); err == nil {
-		fields, err := store.ReadRequiredSubjectFields(root)
-		if err == nil {
-			for _, f := range fields {
-				requiredMap[f] = true
-			}
-		}
+	return subjectCreateWithStudyRoot("")
+}
+
+func subjectCreateWithStudyRoot(studyRoot string) error {
+	req, err := subjectCreateRequirements(studyRoot)
+	if err != nil {
+		return err
 	}
-	fields := []formField{
-		{Name: "name", Label: "Name", Required: requiredMap["name"]},
-		{Name: "email", Label: "Email", Required: requiredMap["email"]},
-		{Name: "phone", Label: "Phone", Required: requiredMap["phone"]},
-		{Name: "age", Label: "Age", Required: requiredMap["age"]},
-		{Name: "sex", Label: "Sex", Required: requiredMap["sex"]},
-		{Name: "notes", Label: "Notes", Required: false},
-	}
+	fields := subjectCreateFormFieldsFromRequirements(req)
 	vals, canceled, err := runForm("Create Subject", fields)
 	if err != nil {
 		return err
@@ -295,14 +288,30 @@ func subjectCreate() error {
 		fmt.Println("canceled")
 		return nil
 	}
+	extra := map[string]string{}
+	for k, v := range vals {
+		switch k {
+		case "name", "type", "email", "phone", "age", "sex", "notes":
+			continue
+		default:
+			if strings.TrimSpace(v) != "" {
+				extra[k] = strings.TrimSpace(v)
+			}
+		}
+	}
+	subjectType := strings.TrimSpace(vals["type"])
+	if subjectType == "" {
+		subjectType = "person"
+	}
 	s := store.Subject{
 		Name:  vals["name"],
-		Type:  "person",
+		Type:  subjectType,
 		Email: vals["email"],
 		Phone: vals["phone"],
 		Age:   vals["age"],
 		Sex:   vals["sex"],
 		Notes: vals["notes"],
+		Extra: extra,
 	}
 	path, err := store.SaveSubject(s)
 	if err != nil {
@@ -310,6 +319,127 @@ func subjectCreate() error {
 	}
 	fmt.Println("created", path)
 	return nil
+}
+
+func subjectCreateRequirements(studyRoot string) (store.SubjectRequirements, error) {
+	req := store.SubjectRequirements{
+		RequiredFields: []string{"name"},
+		FixedFields:    map[string]string{},
+	}
+	root := strings.TrimSpace(studyRoot)
+	if root == "" {
+		detectedRoot, err := util.StudyRootFromCwd()
+		if err == nil {
+			root = detectedRoot
+		}
+	}
+	if root != "" {
+		studyReq, err := store.ReadSubjectRequirements(root)
+		if err != nil {
+			return store.SubjectRequirements{}, err
+		}
+		req = studyReq
+		if len(req.RequiredFields) == 0 {
+			req.RequiredFields = []string{"name"}
+		}
+	}
+	return req, nil
+}
+
+func subjectCreateFormFieldsFromRequirements(req store.SubjectRequirements) []formField {
+	requiredMap := map[string]bool{}
+	for _, f := range req.RequiredFields {
+		key := strings.ToLower(strings.TrimSpace(f))
+		if key != "" {
+			requiredMap[key] = true
+		}
+	}
+	fixedMap := map[string]string{}
+	for k, v := range req.FixedFields {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key != "" {
+			fixedMap[key] = strings.TrimSpace(v)
+		}
+	}
+	if len(requiredMap) == 0 {
+		requiredMap["name"] = true
+	}
+
+	builtins := []string{"name", "type", "email", "phone", "age", "sex"}
+	fields := make([]formField, 0, len(builtins)+len(requiredMap)+len(fixedMap)+1)
+	seen := map[string]bool{}
+	for _, key := range builtins {
+		f := formField{
+			Name:     key,
+			Label:    humanizeFieldName(key),
+			Required: requiredMap[key],
+		}
+		if fixed, ok := fixedMap[key]; ok {
+			f.Required = true
+			f.ReadOnly = true
+			f.Value = fixed
+			f.Label += " (fixed)"
+		}
+		fields = append(fields, f)
+		seen[key] = true
+	}
+
+	for _, raw := range req.RequiredFields {
+		key := strings.ToLower(strings.TrimSpace(raw))
+		if key == "" || seen[key] {
+			continue
+		}
+		f := formField{
+			Name:     key,
+			Label:    humanizeFieldName(key),
+			Required: true,
+		}
+		if fixed, ok := fixedMap[key]; ok {
+			f.ReadOnly = true
+			f.Value = fixed
+			f.Label += " (fixed)"
+		}
+		fields = append(fields, f)
+		seen[key] = true
+	}
+
+	remainingFixed := make([]string, 0, len(fixedMap))
+	for key := range fixedMap {
+		if seen[key] {
+			continue
+		}
+		remainingFixed = append(remainingFixed, key)
+	}
+	sort.Strings(remainingFixed)
+	for _, key := range remainingFixed {
+		fields = append(fields, formField{
+			Name:     key,
+			Label:    humanizeFieldName(key) + " (fixed)",
+			Required: true,
+			ReadOnly: true,
+			Value:    fixedMap[key],
+		})
+	}
+
+	fields = append(fields, formField{Name: "notes", Label: "Notes", Required: false})
+	return fields
+}
+
+func humanizeFieldName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+	for i := range parts {
+		if parts[i] == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(parts[i][:1]) + strings.ToLower(parts[i][1:])
+	}
+	return strings.Join(parts, " ")
 }
 
 func subjectList() error {
@@ -398,6 +528,8 @@ func cmdSession(args []string) error {
 		switch args[0] {
 		case "advance":
 			return cmdSessionAdvance(args[1:])
+		case "reverse":
+			return cmdSessionReverse(args[1:])
 		default:
 			return fmt.Errorf("unknown session subcommand: %s", args[0])
 		}
@@ -407,7 +539,7 @@ func cmdSession(args []string) error {
 	if err != nil {
 		return err
 	}
-	selected, err := selectSubjectsForSession()
+	selected, err := selectSubjectsForSession(root)
 	if err != nil {
 		return err
 	}
@@ -463,6 +595,22 @@ func cmdSession(args []string) error {
 }
 
 func cmdSessions() error {
+	return cmdSessionsWithArgs(nil)
+}
+
+func cmdSessionsWithArgs(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "print":
+			if len(args) > 1 {
+				return fmt.Errorf("unknown argument: %s", args[1])
+			}
+			return cmdSessionsPrint()
+		default:
+			return fmt.Errorf("unknown sessions subcommand: %s", args[0])
+		}
+	}
+
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
 		return err
@@ -475,6 +623,92 @@ func cmdSessions() error {
 		return errors.New("no protocol steps found")
 	}
 	return runSessionsSwitchboard(root, protocol)
+}
+
+func cmdSessionsPrint() error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("no protocol steps found")
+	}
+	slugs, err := listSessionSlugs(root)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		slugs = nil
+	}
+
+	type sessionsPrintRow struct {
+		Session string
+		Step    string
+		Start   string
+		End     string
+	}
+	rows := make([]sessionsPrintRow, 0, len(slugs)*len(protocol.Steps))
+	for _, slug := range slugs {
+		for _, step := range protocol.Steps {
+			start := ""
+			end := ""
+			stepPath := filepath.Join(root, "session", slug, "step", step.Slug, "step.sg.md")
+			fm, _, err := util.ReadFrontmatterFile(stepPath)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					return err
+				}
+			} else {
+				start = strings.TrimSpace(asString(fm["time_started"]))
+				end = strings.TrimSpace(asString(fm["time_finished"]))
+			}
+			rows = append(rows, sessionsPrintRow{
+				Session: slug,
+				Step:    step.Slug,
+				Start:   start,
+				End:     end,
+			})
+		}
+	}
+	tblRows := make([]table.Row, 0, len(rows))
+	sessionWidth := len("SESSION")
+	stepWidth := len("STEP")
+	startWidth := len("START")
+	endWidth := len("END")
+	for _, r := range rows {
+		tblRows = append(tblRows, table.Row{r.Session, r.Step, r.Start, r.End})
+		if len(r.Session) > sessionWidth {
+			sessionWidth = len(r.Session)
+		}
+		if len(r.Step) > stepWidth {
+			stepWidth = len(r.Step)
+		}
+		if len(r.Start) > startWidth {
+			startWidth = len(r.Start)
+		}
+		if len(r.End) > endWidth {
+			endWidth = len(r.End)
+		}
+	}
+	tbl := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "SESSION", Width: max(12, sessionWidth)},
+			{Title: "STEP", Width: max(12, stepWidth)},
+			{Title: "START", Width: max(19, startWidth)},
+			{Title: "END", Width: max(19, endWidth)},
+		}),
+		table.WithWidth(max(80, sessionWidth+stepWidth+startWidth+endWidth+8)),
+		table.WithFocused(false),
+		table.WithHeight(max(2, len(tblRows)+1)),
+	)
+	tbl.SetRows(tblRows)
+	tbl.SetStyles(table.DefaultStyles())
+	fmt.Println(tbl.View())
+	return nil
 }
 
 func cmdSessionAdvance(args []string) error {
@@ -490,7 +724,7 @@ func cmdSessionAdvance(args []string) error {
 		return errors.New("no protocol steps found")
 	}
 
-	sessionSlug, err := parseCurrentSessionAdvanceArgs(args)
+	sessionSlug, err := parseSessionTargetArgs(args)
 	if err != nil {
 		return err
 	}
@@ -514,7 +748,44 @@ func cmdSessionAdvance(args []string) error {
 	return nil
 }
 
-func parseCurrentSessionAdvanceArgs(args []string) (string, error) {
+func cmdSessionReverse(args []string) error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
+	if len(protocol.Steps) == 0 {
+		return errors.New("no protocol steps found")
+	}
+
+	sessionSlug, err := parseSessionTargetArgs(args)
+	if err != nil {
+		return err
+	}
+	if sessionSlug == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		inferred, ok := inferSessionSlugFromCwd(root, cwd)
+		if !ok {
+			return errors.New("could not infer session from current directory; pass --session <slug>")
+		}
+		sessionSlug = inferred
+	}
+
+	res, err := reverseSessionOnce(root, sessionSlug, protocol)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("session=%s state=%s step=%s\n", sessionSlug, res.State, res.StepSlug)
+	return nil
+}
+
+func parseSessionTargetArgs(args []string) (string, error) {
 	var sessionSlug string
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
@@ -841,6 +1112,30 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 	}
 }
 
+func reverseSessionOnce(root, sessionSlug string, protocol store.Protocol) (sessionAdvanceResult, error) {
+	sessionDir := filepath.Join(root, "session", sessionSlug)
+	if info, err := os.Stat(sessionDir); err != nil || !info.IsDir() {
+		return sessionAdvanceResult{}, fmt.Errorf("session not found: %s", sessionSlug)
+	}
+	sessionPath := filepath.Join(sessionDir, "session.sg.md")
+	if _, err := os.Stat(sessionPath); err != nil {
+		return sessionAdvanceResult{}, fmt.Errorf("session missing file: %s", sessionPath)
+	}
+
+	progress, err := inspectSessionProgress(sessionDir, protocol)
+	if err != nil {
+		return sessionAdvanceResult{}, err
+	}
+	if progress.ActiveStepIdx < 0 || progress.ActiveStepIdx >= len(protocol.Steps) {
+		return sessionAdvanceResult{}, errors.New("cannot reverse: no active step")
+	}
+	active := protocol.Steps[progress.ActiveStepIdx]
+	if err := clearSessionStepStart(sessionDir, active.Slug); err != nil {
+		return sessionAdvanceResult{}, err
+	}
+	return sessionAdvanceResult{State: "reversed", StepSlug: active.Slug}, nil
+}
+
 func startSessionStep(sessionDir string, step store.ProtocolStep, now string) error {
 	stepDir := filepath.Join(sessionDir, "step", step.Slug)
 	if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
@@ -873,6 +1168,17 @@ func finishSessionStep(sessionDir, stepSlug, now string) error {
 		return fmt.Errorf("cannot finish step without time_started: %s", stepSlug)
 	}
 	fm["time_finished"] = now
+	return util.WriteFrontmatterFile(stepPath, fm, body)
+}
+
+func clearSessionStepStart(sessionDir, stepSlug string) error {
+	stepPath := filepath.Join(sessionDir, "step", stepSlug, "step.sg.md")
+	fm, body, err := util.ReadFrontmatterFile(stepPath)
+	if err != nil {
+		return err
+	}
+	delete(fm, "time_started")
+	delete(fm, "time_finished")
 	return util.WriteFrontmatterFile(stepPath, fm, body)
 }
 
@@ -916,8 +1222,8 @@ func uniqueSessionSlug(root, baseSlug string) string {
 	}
 }
 
-func selectSubjectsForSession() ([]store.Subject, error) {
-	selected, canceled, err := runSessionCreatePicker()
+func selectSubjectsForSession(studyRoot string) ([]store.Subject, error) {
+	selected, canceled, err := runSessionCreatePicker(studyRoot)
 	if err != nil {
 		return nil, err
 	}

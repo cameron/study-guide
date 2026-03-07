@@ -141,10 +141,17 @@ mode), the fixed key/value pairs should be displayed but not editable, and the r
 fields should be enforced
 
 Optionally, may specify a list of required fields for subject creation flow:
-- `required_fields` (array: any of `name`, `email`, `phone`, `age`, `sex`)
+- `required_fields` (array: supports known fields `name`, `email`, `phone`, `age`, `sex` plus custom fields)
 
 These requirements must be enforced at session creation time when subject selection takes
 place. Subjects not meeting the criteria should not be presented as selectable.
+
+Any scalar key in `subject-requirements.yaml` other than `required_fields` is treated as a fixed
+subject field/value for in-study subject creation. Fixed fields:
+- are shown in the subject-create form
+- are pre-populated with the fixed value from `subject-requirements.yaml`
+- are marked fixed (not editable)
+- are always persisted onto the created subject frontmatter
 
 ## `<study-root>/session/<slug>/session.sg.md`
 Required frontmatter:
@@ -176,7 +183,7 @@ Optional markdown body:
 
 `sg` is the executable.
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
-`sg session advance`, `sg ingest-photos`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
+`sg session advance`, `sg sessions print`, `sg ingest-photos`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
 
 ### `sg` (no args)
 DWIM entrypoint behavior:
@@ -209,6 +216,7 @@ Creates:
 ### `sg subject create`
 - creates a subject in `~/.study-guide/subject/`
 - enforces `subject-requirements.yaml` required fields when run from a study directory
+- when launched from `sg session`/`sg sessions` create mode, reads requirements from that active study root
 - collects optional fields after required fields
 
 ### `sg subject search <name>`
@@ -247,14 +255,14 @@ Interactive session switchboard for running multiple sessions in parallel from o
 Behavior:
 1. Shows only incomplete sessions.
 2. Provides an autocomplete query over subject name and session slug.
-3. Browse table columns are ordered: `SLUG | SUBJECT | ACTIVE | STEP | NEXT`.
-4. `ACTIVE` and `NEXT` columns are actionable cells.
+3. Browse table columns are ordered: `SLUG | SUBJECT | FOCUSED | STEP | NEXT`.
+4. `FOCUSED` and `NEXT` columns are actionable cells.
 5. The selected row (default top row) always has an active action cursor.
 6. Arrow key behavior:
 - up/down: move selected row
-- left/right: move action cursor between `ACTIVE` and `NEXT` in the selected row
+- left/right: move action cursor between `FOCUSED` and `NEXT` in the selected row
 7. Press `Enter` to execute the action under the active action cursor:
-- `ACTIVE`: mark that session as the single active session in study frontmatter (`study.sg.md` key `active_session_slug`); if the session has not started any protocol step yet, also auto-start its first step
+- `FOCUSED`: mark that session as the single focused session in study frontmatter (`study.sg.md` key `active_session_slug`); if the session has not started any protocol step yet, also auto-start its first step
 - `NEXT`: perform exactly one timing transition (`start`, `advance`, or `finish`) based on current session progress
 8. Press `Esc` to quit browse view.
 9. Includes an action to create a new session without leaving the switchboard.
@@ -266,35 +274,53 @@ Behavior:
 11. The list control/help legend is hidden on this screen.
 12. Replace generic item-count status text with `current step: <step-name|->` status text.
 13. In selected row, the focused actionable cell is visually emphasized (high-contrast and bracketed).
-14. `ACTIVE` column text is:
-- always `active` when row is the currently active session
-- `activate` when row is selected and not active
-- empty for non-selected, non-active rows
-  When the active action cursor is on `ACTIVE`, the visible text is bracketed (for example `{active}` or `{activate}`).
+14. `FOCUSED` column text is:
+- always `focused` when row is the currently focused session
+- `focus` when row is selected, not focused, and action cursor is on `FOCUSED`
+- empty for non-selected rows and for selected rows while action cursor is on `NEXT`
+  When the active action cursor is on `FOCUSED`, the visible text is bracketed (for example `{focused}` or `{focus}`).
 15. `NEXT` column shows the next transition label (or `conclude` when progress action is `finish`).
-   Actionable cells (`ACTIVE` and `NEXT`) use a subtle default background tint to indicate CTA affordance even when unfocused.
-16. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `ACTIVE=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).
-   Unfocused action text and `NEXT` text should use a brighter grey than footer/helper text (target color: ANSI 256 color `246`).
-17. Filter prompt text is ` filter: ` (one leading space; no separate `Sessions` heading line).
-   Filter placeholder text is exactly `by subject or slug`.
-18. Browse table does not include `Create new session` or `Exit` rows.
-   When there are no incomplete sessions, the table shows a single empty-state row: `no active sessions`.
-19. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
-20. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
+   Actionable cells (`FOCUSED` and `NEXT`) use a subtle transparent-green background when unfocused and a bright-green background when focused.
+16. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `FOCUSED=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).
+17. Browse layout order is:
+- table with headers
+- one summary line for focused session
+- one empty line
+- filter input (` filter: ` prompt)
+- open-sessions table body
+18. Focused session row is always pinned to the top of the open-sessions list.
+19. Focused session row uses a light blue selected background tint.
+20. Filter placeholder text is exactly `by subject or slug`.
+21. Browse table does not include `Create new session` or `Exit` rows.
+   When there are no incomplete sessions, the table shows a single empty-state row: `no open sessions`.
+22. Browse footer key hint is: `ctrl+n to create new; esc to quit`.
+23. Row selection highlight must be terminal-adaptive and use a subtle tint approximately 15% away from terminal background luminance (lighter on dark terminals, darker on light terminals) to preserve readability across themes.
    The selected-row tint should include a slight blue hue with exact adaptive colors: light `#d9dcef`, dark `#262b3a`.
-21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
-22. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above `-> Create Session`.
-23. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
-24. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
-25. Create-mode list item labels are uniformly indented with exactly two leading spaces.
-26. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
-27. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
-28. `p` triggers publish from browse view (keyboard action; not a table row). When there is at least one finished session and zero in-progress sessions, browse footer also includes a bright hint: `p publish with <X> sessions` where `X` is the finished-session count.
-29. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
+24. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
+25. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+26. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above `-> Create Session`.
+27. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
+28. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
+29. Create-mode list item labels are uniformly indented with exactly two leading spaces.
+30. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
+31. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
+32. `p` triggers publish from browse view (keyboard action; not a table row). When there is at least one finished session and zero in-progress sessions, browse footer also includes a bright hint: `p publish with <X> sessions` where `X` is the finished-session count.
+33. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
+34. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must render the subject form in an isolated screen and clear on return, so stale rows from the picker/session list never leak into the form (or vice versa).
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
+
+### `sg sessions print`
+Non-interactive session timing report.
+
+Behavior:
+- prints a table with columns: `SESSION | STEP | START | END`
+- `STEP` values use protocol step slugs
+- includes one row per protocol step for each session under `<study-root>/session/`
+- session rows are grouped by session slug (ascending) and step rows follow protocol order
+- `START`/`END` values come from each step's `time_started`/`time_finished` frontmatter (empty when missing)
+- rendering uses a Bubble Tea table component so columns align visually in terminal output (not markdown-pipe rows)
 
 ### `sg session advance`
 Non-interactive "advance once" command for scriptable/session-directory usage.
@@ -307,6 +333,17 @@ Behavior:
   - advance to next step, or
   - finish the session if final step is active
 - prints resulting state (`started`, `advanced`, or `finished`) with session slug and active step slug
+
+### `sg session reverse`
+Non-interactive "step backwards once" command for scriptable/session-directory usage.
+
+Behavior:
+- when run inside `<study-root>/session/<slug>/`, target that session
+- otherwise require explicit `--session <slug>`
+- finds the current active step and removes only its `time_started` value
+- keeps step folders/files intact
+- if no active step exists, returns an error
+- prints resulting state (`reversed`) with session slug and step slug
 
 ### `sg ingest-photos`
 Purpose: copy photo assets into matching step `asset/` folders by capture time.
@@ -413,11 +450,13 @@ All criteria below are pass/fail requirements for v1.
 2. Created subject file includes required fields: `uuid`, `type`, `name`.
 3. `uuid` is valid UUIDv4 format.
 4. When invoked from a study directory, required fields from `subject-requirements.yaml` are enforced.
-5. `sg subject search <name>` returns matching subjects by name.
-6. `sg subject print <id-or-name>` prints exactly one matching subject or a clear not-found/ambiguous error.
-7. `sg subject ls` lists subjects in a human-readable format.
-8. `sg subject rm <id>` deletes only the targeted subject file and leaves others unchanged.
-9. `sg subject edit <id-or-name>` updates a single subject interactively and preserves UUID/path.
+5. Custom required fields (non-built-in keys) are prompted in subject creation and persisted to subject frontmatter.
+6. Fixed subject-requirement key/value pairs are shown in the create form as fixed and written to the subject.
+7. `sg subject search <name>` returns matching subjects by name.
+8. `sg subject print <id-or-name>` prints exactly one matching subject or a clear not-found/ambiguous error.
+9. `sg subject ls` lists subjects in a human-readable format.
+10. `sg subject rm <id>` deletes only the targeted subject file and leaves others unchanged.
+11. `sg subject edit <id-or-name>` updates a single subject interactively and preserves UUID/path.
 
 ### C. Protocol Parsing
 1. `protocol.sg.md` is accepted only when `# Protocol Summary` and `# Steps` exist.
@@ -436,7 +475,7 @@ All criteria below are pass/fail requirements for v1.
 7. Step times are written by `sg session` and never inferred from ingested media.
 8. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
-11. In `sg sessions`, `Enter` executes the currently focused action cell: `ACTIVE` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
+11. In `sg sessions`, `Enter` executes the currently focused action cell: `FOCUSED` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
 13. `sg session advance` works from within a session directory without requiring `cd` to other sessions.
 14. `sg session advance --session <slug>` advances a specific session from study root (or any path within the study).
@@ -446,6 +485,9 @@ All criteria below are pass/fail requirements for v1.
 18. `sg sessions` shows `esc to cancel` helper text in subtle/grey style while an action is armed.
 19. `sg sessions` progress numerator `X` in `[X/Y]` reflects progressed steps, not only active-step index; when no step is currently active but later protocol steps remain, `X` equals the number of completed steps.
 20. In `sg sessions`, pressing `p` triggers publish from browse view. Footer hint text (`p publish with <X> sessions`) is shown only when `finished_sessions > 0` and `in_progress_sessions == 0`.
+21. `sg session reverse` clears `time_started` on the active step only and keeps step files/folders intact.
+22. In `sg sessions`, pressing `ctrl+b` performs the same single-step reverse transition as `sg session reverse` for the selected row.
+23. `sg sessions print` outputs one timing row per protocol step per session in an aligned Bubble Tea table with `SESSION | STEP | START | END` columns.
 
 ### E. Photo Ingestion
 1. `sg ingest-photos` is non-interactive and runs against all sessions in the study.
