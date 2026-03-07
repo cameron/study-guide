@@ -108,6 +108,49 @@ func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 	}
 }
 
+func TestRunDataClean_RemovesAssetFilesAndKeepsMetadata(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
+	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
+	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
+
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "asset", "a-one.jpg"), "a")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "asset", "b-one.jpg"), "b")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "02-step-two", "asset", "c-two.jpg"), "c")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "step.sg.md"), "---\n---\n")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "session.sg.md"), "---\n---\n")
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	out := captureStdout(t, func() {
+		if code := Run([]string{"data", "clean"}); code != 0 {
+			t.Fatalf("Run(data clean) code=%d want=0", code)
+		}
+	})
+	if !strings.Contains(out, "removed asset files: 3") {
+		t.Fatalf("expected clean summary, got:\n%s", out)
+	}
+
+	assertAssetCount(t, root, "01-01-2026-alpha", 0)
+	for _, mustExist := range []string{
+		filepath.Join(root, "study.sg.md"),
+		filepath.Join(root, "protocol.sg.md"),
+		filepath.Join(root, "session", "01-01-2026-alpha", "session.sg.md"),
+		filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "step.sg.md"),
+	} {
+		if _, err := os.Stat(mustExist); err != nil {
+			t.Fatalf("expected metadata file to remain: %s (%v)", mustExist, err)
+		}
+	}
+}
+
 func TestRunLegacyIngestPhotosCommandIsUnknown(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		if code := Run([]string{"ingest-photos"}); code != 2 {
@@ -116,6 +159,17 @@ func TestRunLegacyIngestPhotosCommandIsUnknown(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "unknown command: ingest-photos") {
 		t.Fatalf("expected unknown command error, got %q", stderr)
+	}
+}
+
+func TestRunHelp_ListsDataSubcommandsIndependently(t *testing.T) {
+	out := captureStdout(t, func() {
+		if code := Run([]string{"help"}); code != 0 {
+			t.Fatalf("Run(help) code=%d want=0", code)
+		}
+	})
+	if !strings.Contains(out, "\n  data ingest [--assets-dir <path>]\n") {
+		t.Fatalf("expected independent data ingest help line, got:\n%s", out)
 	}
 }
 

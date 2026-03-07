@@ -192,7 +192,8 @@ Optional markdown body:
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
 
 All interactive Bubble Tea flows must be launched through a single shared program runner configured with alternate-screen mode so `sg` takes over and restores the terminal cleanly.
-`sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
+`sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg data clean`, `sg status`, and `sg publish` are non-interactive.
+CLI help output lists `sg data ingest`, `sg data ls`, and `sg data clean` as separate command entries.
 
 ### `sg` (no args)
 DWIM entrypoint behavior:
@@ -384,6 +385,8 @@ Ownership windows:
 Rules:
 - requires all step `time_started`; requires `time_finished` on last step
 - deterministic output filename: `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`
+- in default Photos SQLite mode, candidate selection groups variants by logical Photos master asset id and keeps only the newest row by metadata modification/create time (so edited/rotated variants win over older originals)
+- before step matching, captured candidates that share the same sub-second EXIF capture instant are deduplicated; Photos render candidates (`resources/renders`) are preferred over non-render variants, then newest file modification time breaks ties
 - duplicate handling: skip if same content already exists in target session
 - idempotent: re-running ingestion should not duplicate copied assets
 - prints per-session counts and one aggregate summary line
@@ -399,6 +402,16 @@ Behavior:
 - rows are sorted by `SESSION`, then `STEP`, then `FILE`
 - prints aggregate summary line with total assets
 
+### `sg data clean`
+Purpose: remove all ingested step assets from the current study.
+
+Behavior:
+- non-interactive
+- scans all sessions under `<study-root>/session/`
+- deletes regular files under `step/<step-slug>/asset/` directories
+- does not delete study/session/step metadata files
+- prints a summary count of removed asset files
+
 ### `sg status`
 Reports missing/invalid data that affects publication:
 - missing expected study sections (`Hypotheses`, `Discussion`, `Conclusion`)
@@ -410,16 +423,6 @@ Reports missing/invalid data that affects publication:
 Outputs:
 - issue list
 - overall completeness flag
-
-### `sg rm-assets`
-Purpose: remove all ingested step assets from the current study.
-
-Behavior:
-- non-interactive
-- scans all sessions under `<study-root>/session/`
-- deletes regular files under `step/<step-slug>/asset/` directories
-- preserves study/session/step markdown files and directory structure
-- prints a summary count of removed asset files
 
 ### `sg publish`
 Generates both site and PDF from study files.
@@ -527,6 +530,7 @@ All criteria below are pass/fail requirements for v1.
    The default source path is configurable via `~/.study-guide/config` key `photos_library_path`.
    If configured path points at `Photos Library.photoslibrary` package root, ingestion resolves to `originals/` (or `Masters/` fallback) for file copy targets.
    When `database/Photos.sqlite` is available, candidate assets are selected via SQL metadata query (not filesystem `mtime` walk), then resolved to `originals/<ZDIRECTORY>/<ZFILENAME>`.
+   That SQL selection deduplicates duplicate/edited metadata rows for the same logical master asset (using Photos master linkage) by keeping only the most recent metadata row.
    If configured source is not a Photos Library package (no `database/Photos.sqlite`), ingestion falls back to filesystem scanning.
    Unrecognized keys in `~/.study-guide/config` are ignored but emitted as warnings.
 5. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
@@ -548,6 +552,7 @@ All criteria below are pass/fail requirements for v1.
 - study fixture: `fixtures/four-concurrently/` (session step `asset/` dirs empty before ingest)
 - source media fixture: `fixtures/four-concurrently-data/`
 - each source photo embeds metadata describing expected destination (`subject`, `step`) so tests can assert ingestion placement by metadata, not only by filename.
+15. `sg data clean` removes all files under every `session/*/step/*/asset/` directory in the current study and prints a deterministic removed-file count.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
@@ -557,11 +562,6 @@ All criteria below are pass/fail requirements for v1.
 5. `sg status` outputs:
 - a human-readable issue list
 - an overall completeness result
-
-### H. Asset Cleanup
-1. `sg rm-assets` removes all files under every `session/*/step/*/asset/` directory in the current study.
-2. `sg rm-assets` does not delete `study.sg.md`, `protocol.sg.md`, `session.sg.md`, or `step.sg.md`.
-3. `sg rm-assets` outputs a deterministic summary count of removed files.
 
 ### G. Publish
 1. `sg publish` always attempts generation (best effort), even if data is incomplete.

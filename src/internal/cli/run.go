@@ -52,8 +52,6 @@ func Run(args []string) int {
 		err = cmdPublish()
 	case "data":
 		err = cmdData(args[1:])
-	case "rm-assets":
-		err = cmdRmAssets(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return 0
@@ -110,9 +108,9 @@ Commands:
   sessions [print]
   data ingest [--assets-dir <path>]
   data ls
+  data clean
   status
-  publish
-  rm-assets`)
+  publish`)
 }
 
 func cmdInit() error {
@@ -640,7 +638,7 @@ func cmdSessionsWithArgs(args []string) error {
 
 func cmdData(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: sg data ingest [--assets-dir <path>] | ls")
+		return errors.New("usage: sg data <ingest [--assets-dir <path>] | ls | clean>")
 	}
 	switch args[0] {
 	case "ingest":
@@ -650,6 +648,8 @@ func cmdData(args []string) error {
 			return fmt.Errorf("unknown argument: %s", args[1])
 		}
 		return cmdDataLs()
+	case "clean":
+		return cmdDataClean(args[1:])
 	default:
 		return fmt.Errorf("unknown data subcommand: %s", args[0])
 	}
@@ -2142,9 +2142,9 @@ func cmdIngestPhotos(args []string) error {
 	return nil
 }
 
-func cmdRmAssets(args []string) error {
+func cmdDataClean(args []string) error {
 	if len(args) > 0 {
-		return errors.New("usage: sg rm-assets")
+		return errors.New("usage: sg data clean")
 	}
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
@@ -2259,24 +2259,43 @@ func collectPhotosLibraryImageFilesBySQLite(dbPath, originalsRoot string, start,
 	minExif := minTime.Local().Format("2006:01:02 15:04:05")
 	maxExif := maxTime.Local().Format("2006:01:02 15:04:05")
 	query := fmt.Sprintf(`
-SELECT DISTINCT
-  COALESCE(a.ZDIRECTORY, ''),
-  a.ZFILENAME
-FROM ZASSET a
-LEFT JOIN ZADDITIONALASSETATTRIBUTES aa ON aa.ZASSET = a.Z_PK
-WHERE a.ZFILENAME IS NOT NULL
-  AND (
-    lower(a.ZFILENAME) LIKE '%%.jpg'
-    OR lower(a.ZFILENAME) LIKE '%%.jpeg'
-    OR lower(a.ZFILENAME) LIKE '%%.png'
-    OR lower(a.ZFILENAME) LIKE '%%.heic'
-    OR lower(a.ZFILENAME) LIKE '%%.tif'
-    OR lower(a.ZFILENAME) LIKE '%%.tiff'
-  )
-  AND (
-    (a.ZDATECREATED IS NOT NULL AND (a.ZDATECREATED + strftime('%%s','2001-01-01 00:00:00')) BETWEEN %d AND %d)
-    OR (aa.ZEXIFTIMESTAMPSTRING IS NOT NULL AND aa.ZEXIFTIMESTAMPSTRING >= '%s' AND aa.ZEXIFTIMESTAMPSTRING <= '%s')
-  );`, minUnix, maxUnix, minExif, maxExif)
+WITH filtered AS (
+  SELECT
+    COALESCE(a.ZDIRECTORY, '') AS zdirectory,
+    a.ZFILENAME AS zfilename,
+    COALESCE(NULLIF(a.ZMASTER, 0), a.Z_PK) AS logical_asset_key,
+    COALESCE(a.ZMODIFICATIONDATE, a.ZDATECREATED, -1) AS sort_modified,
+    a.Z_PK AS sort_pk
+  FROM ZASSET a
+  LEFT JOIN ZADDITIONALASSETATTRIBUTES aa ON aa.ZASSET = a.Z_PK
+  WHERE a.ZFILENAME IS NOT NULL
+    AND (
+      lower(a.ZFILENAME) LIKE '%%.jpg'
+      OR lower(a.ZFILENAME) LIKE '%%.jpeg'
+      OR lower(a.ZFILENAME) LIKE '%%.png'
+      OR lower(a.ZFILENAME) LIKE '%%.heic'
+      OR lower(a.ZFILENAME) LIKE '%%.tif'
+      OR lower(a.ZFILENAME) LIKE '%%.tiff'
+    )
+    AND (
+      (a.ZDATECREATED IS NOT NULL AND (a.ZDATECREATED + strftime('%%s','2001-01-01 00:00:00')) BETWEEN %d AND %d)
+      OR (aa.ZEXIFTIMESTAMPSTRING IS NOT NULL AND aa.ZEXIFTIMESTAMPSTRING >= '%s' AND aa.ZEXIFTIMESTAMPSTRING <= '%s')
+    )
+),
+ranked AS (
+  SELECT
+    zdirectory,
+    zfilename,
+    logical_asset_key,
+    ROW_NUMBER() OVER (
+      PARTITION BY logical_asset_key
+      ORDER BY sort_modified DESC, sort_pk DESC
+    ) AS rn
+  FROM filtered
+)
+SELECT ranked.zdirectory, ranked.zfilename
+FROM ranked
+WHERE ranked.rn = 1;`, minUnix, maxUnix, minExif, maxExif)
 	out, err := runSQLiteQueryFn(dbPath, query)
 	if err != nil {
 		return nil, err
@@ -2434,7 +2453,65 @@ func buildCapturedAssets(sources []string, captureTimeFn func(string) (time.Time
 			exifErr:     exifErr,
 		})
 	}
-	return out, nil
+	return dedupeCapturedAssetsByCaptureInstant(out), nil
+}
+
+func dedupeCapturedAssetsByCaptureInstant(assets []capturedAsset) []capturedAsset {
+	type pick struct {
+		asset capturedAsset
+		mod   time.Time
+	}
+	byKey := map[string]pick{}
+	ordered := make([]string, 0, len(assets))
+	keepDirect := make([]capturedAsset, 0, len(assets))
+
+	for _, asset := range assets {
+		if asset.exifErr != nil || asset.captureTime.Nanosecond() == 0 {
+			keepDirect = append(keepDirect, asset)
+			continue
+		}
+		key := asset.captureTime.In(time.UTC).Format(time.RFC3339Nano)
+		mod := fileModTime(asset.path)
+		existing, ok := byKey[key]
+		if !ok {
+			byKey[key] = pick{asset: asset, mod: mod}
+			ordered = append(ordered, key)
+			continue
+		}
+		if shouldReplaceCapturedAssetPick(asset.path, mod, existing.asset.path, existing.mod) {
+			byKey[key] = pick{asset: asset, mod: mod}
+		}
+	}
+
+	out := make([]capturedAsset, 0, len(keepDirect)+len(ordered))
+	out = append(out, keepDirect...)
+	for _, key := range ordered {
+		out = append(out, byKey[key].asset)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].path < out[j].path
+	})
+	return out
+}
+
+func shouldReplaceCapturedAssetPick(candidatePath string, candidateMod time.Time, existingPath string, existingMod time.Time) bool {
+	candidateRender := isPhotosRenderPath(candidatePath)
+	existingRender := isPhotosRenderPath(existingPath)
+	if candidateRender != existingRender {
+		return candidateRender
+	}
+	if candidateMod.After(existingMod) {
+		return true
+	}
+	if candidateMod.Equal(existingMod) && candidatePath < existingPath {
+		return true
+	}
+	return false
+}
+
+func isPhotosRenderPath(path string) bool {
+	p := strings.ToLower(filepath.ToSlash(path))
+	return strings.Contains(p, "/resources/renders/")
 }
 
 func ingestCapturedAssetsForSession(sessionDir string, windows []stepWindow, assets []capturedAsset, warnf func(string, ...any)) (ingestStats, error) {
@@ -2707,6 +2784,7 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 }
 
 func findStepWindowIndex(captured time.Time, windows []stepWindow) int {
+	captured = captured.Truncate(time.Second)
 	for i, w := range windows {
 		if (captured.Equal(w.Start) || captured.After(w.Start)) && (captured.Equal(w.End) || captured.Before(w.End)) {
 			return i
@@ -2733,14 +2811,18 @@ func listSessionSlugs(root string) ([]string, error) {
 
 func exifCaptureTime(path string) (time.Time, error) {
 	if _, err := exec.LookPath("exiftool"); err == nil {
-		cmd := exec.Command("exiftool", "-s3", "-DateTimeOriginal", "-d", "%Y-%m-%d %H:%M:%S", path)
-		out, err := cmd.Output()
-		if err == nil {
+		for _, tag := range []string{"SubSecDateTimeOriginal", "DateTimeOriginal"} {
+			cmd := exec.Command("exiftool", "-s3", "-"+tag, path)
+			out, err := cmd.Output()
+			if err != nil {
+				continue
+			}
 			v := strings.TrimSpace(string(out))
-			if v != "" {
-				if t, parseErr := time.ParseInLocation("2006-01-02 15:04:05", v, time.Local); parseErr == nil {
-					return t, nil
-				}
+			if v == "" {
+				continue
+			}
+			if t, parseErr := parseExifToolTimestamp(v); parseErr == nil {
+				return t, nil
 			}
 		}
 	}
@@ -2758,6 +2840,43 @@ func exifCaptureTime(path string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return tm.In(time.Local), nil
+}
+
+func parseExifToolTimestamp(v string) (time.Time, error) {
+	layouts := []string{
+		"2006:01:02 15:04:05.999999999-07:00",
+		"2006:01:02 15:04:05.999999999",
+		"2006:01:02 15:04:05-07:00",
+		"2006:01:02 15:04:05",
+	}
+	var lastErr error
+	for _, layout := range layouts {
+		var (
+			t   time.Time
+			err error
+		)
+		if strings.Contains(layout, "-07:00") {
+			t, err = time.Parse(layout, v)
+		} else {
+			t, err = time.ParseInLocation(layout, v, time.Local)
+		}
+		if err == nil {
+			return t.In(time.Local), nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("unsupported EXIF timestamp format")
+	}
+	return time.Time{}, lastErr
+}
+
+func fileModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 func collectSessionAssetHashes(sessionDir string) (map[string]bool, error) {

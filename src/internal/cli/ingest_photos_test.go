@@ -242,6 +242,78 @@ func TestCollectSessionAssetHashes_DedupesByContent(t *testing.T) {
 	}
 }
 
+func TestDedupeCapturedAssetsByCaptureInstant_KeepsNewestModTime(t *testing.T) {
+	if _, err := exec.LookPath("exiftool"); err != nil {
+		t.Skip("exiftool not available")
+	}
+
+	tmp := t.TempDir()
+	older := filepath.Join(tmp, "older.heic")
+	newer := filepath.Join(tmp, "newer.heic")
+	src := filepath.Join("..", "..", "..", "fixtures", "four-concurrently-data", "20260307-120156_8909c86f.heic")
+	mustCopyFile(t, src, older)
+	mustCopyFile(t, src, newer)
+
+	oldTS := mustParseTS(t, "12:00:00 01-01-2026")
+	newTS := mustParseTS(t, "12:00:01 01-01-2026")
+	if err := os.Chtimes(older, oldTS, oldTS); err != nil {
+		t.Fatalf("Chtimes older error: %v", err)
+	}
+	if err := os.Chtimes(newer, newTS, newTS); err != nil {
+		t.Fatalf("Chtimes newer error: %v", err)
+	}
+
+	assets, err := buildCapturedAssets([]string{older, newer}, exifCaptureTime)
+	if err != nil {
+		t.Fatalf("buildCapturedAssets returned error: %v", err)
+	}
+	got := dedupeCapturedAssetsByCaptureInstant(assets)
+	if len(got) != 1 {
+		t.Fatalf("expected one deduped asset, got %d (%#v)", len(got), got)
+	}
+	if got[0].path != newer {
+		t.Fatalf("expected newer file to win dedupe: got=%q want=%q", got[0].path, newer)
+	}
+}
+
+func TestDedupeCapturedAssetsByCaptureInstant_DoesNotDedupeSecondPrecisionOnly(t *testing.T) {
+	a := capturedAsset{path: "/tmp/a.heic", captureTime: mustParseTS(t, "10:00:00 01-01-2026")}
+	b := capturedAsset{path: "/tmp/b.heic", captureTime: mustParseTS(t, "10:00:00 01-01-2026")}
+	got := dedupeCapturedAssetsByCaptureInstant([]capturedAsset{a, b})
+	if len(got) != 2 {
+		t.Fatalf("expected second-precision captures to remain distinct, got %d", len(got))
+	}
+}
+
+func TestDedupeCapturedAssetsByCaptureInstant_PrefersRenderPath(t *testing.T) {
+	tmp := t.TempDir()
+	original := filepath.Join(tmp, "Photos Library.photoslibrary", "originals", "1", "A.heic")
+	render := filepath.Join(tmp, "Photos Library.photoslibrary", "resources", "renders", "1", "A_1_201_a.heic")
+	mustWriteFile(t, original, "original")
+	mustWriteFile(t, render, "render")
+
+	older := mustParseTS(t, "12:00:00 01-01-2026")
+	newer := mustParseTS(t, "12:00:01 01-01-2026")
+	if err := os.Chtimes(original, newer, newer); err != nil {
+		t.Fatalf("Chtimes original error: %v", err)
+	}
+	if err := os.Chtimes(render, older, older); err != nil {
+		t.Fatalf("Chtimes render error: %v", err)
+	}
+
+	at := mustParseTS(t, "10:00:00 01-01-2026").Add(123 * time.Millisecond)
+	got := dedupeCapturedAssetsByCaptureInstant([]capturedAsset{
+		{path: original, captureTime: at},
+		{path: render, captureTime: at},
+	})
+	if len(got) != 1 {
+		t.Fatalf("expected one deduped asset, got %d", len(got))
+	}
+	if got[0].path != render {
+		t.Fatalf("expected render path to win dedupe: got=%q want=%q", got[0].path, render)
+	}
+}
+
 func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
@@ -369,6 +441,7 @@ func TestCmdIngestPhotos_FourConcurrentlyFixture_UsesEmbeddedSubjectStepMetadata
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "four-concurrently"), studyRoot)
+	mustWidenPointFocusWindows(t, studyRoot, time.Second)
 
 	preCount := countIngestedAssetsInStudy(t, studyRoot)
 	if preCount != 0 {
@@ -923,6 +996,20 @@ func mustWriteStepFile(t *testing.T, path string, fm map[string]any, body string
 	}
 }
 
+func mustCopyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile %s error: %v", src, err)
+	}
+	if err := util.EnsureDir(filepath.Dir(dst)); err != nil {
+		t.Fatalf("EnsureDir %s error: %v", dst, err)
+	}
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		t.Fatalf("WriteFile %s error: %v", dst, err)
+	}
+}
+
 func mustWriteFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := util.EnsureDir(filepath.Dir(path)); err != nil {
@@ -1024,6 +1111,64 @@ func mustPopulateFocusWindowsFromStepTimes(t *testing.T, studyRoot string) {
 				t.Fatalf("WriteFrontmatterFile %s error: %v", stepPath, err)
 			}
 		}
+	}
+}
+
+func mustWidenPointFocusWindows(t *testing.T, studyRoot string, by time.Duration) {
+	t.Helper()
+	stepRoot := filepath.Join(studyRoot, "session")
+	err := filepath.WalkDir(stepRoot, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || filepath.Base(path) != "step.sg.md" {
+			return nil
+		}
+		fm, body, err := util.ReadFrontmatterFile(path)
+		if err != nil {
+			return err
+		}
+		rawWindows, ok := fm["focus_windows"]
+		if !ok {
+			return nil
+		}
+		list, ok := rawWindows.([]any)
+		if !ok {
+			return nil
+		}
+		changed := false
+		for i := range list {
+			entry, ok := list[i].(map[string]any)
+			if !ok {
+				continue
+			}
+			startRaw := strings.TrimSpace(asString(entry["time_started"]))
+			endRaw := strings.TrimSpace(asString(entry["time_finished"]))
+			if startRaw == "" || endRaw == "" {
+				continue
+			}
+			startTS, err := util.ParseTimestamp(startRaw)
+			if err != nil {
+				continue
+			}
+			endTS, err := util.ParseTimestamp(endRaw)
+			if err != nil {
+				continue
+			}
+			if startTS.Equal(endTS) {
+				entry["time_finished"] = startTS.Add(by).Format(util.TimestampLayout)
+				changed = true
+			}
+			list[i] = entry
+		}
+		if !changed {
+			return nil
+		}
+		fm["focus_windows"] = list
+		return util.WriteFrontmatterFile(path, fm, body)
+	})
+	if err != nil {
+		t.Fatalf("mustWidenPointFocusWindows failed: %v", err)
 	}
 }
 
