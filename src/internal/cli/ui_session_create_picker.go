@@ -147,7 +147,7 @@ func runSessionCreatePicker(studyRoot string) ([]store.Subject, bool, error) {
 			return nil, false, err
 		}
 		model := newSessionCreatePickerModel(subs, selectedBySubject)
-		res, err := tea.NewProgram(model).Run()
+		res, err := runInteractiveProgram(model)
 		if err != nil {
 			return nil, false, err
 		}

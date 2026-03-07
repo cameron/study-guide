@@ -50,8 +50,8 @@ func Run(args []string) int {
 		err = cmdStatus(true)
 	case "publish":
 		err = cmdPublish()
-	case "ingest-photos":
-		err = cmdIngestPhotos(args[1:])
+	case "data":
+		err = cmdData(args[1:])
 	case "rm-assets":
 		err = cmdRmAssets(args[1:])
 	case "help", "-h", "--help":
@@ -108,9 +108,10 @@ Commands:
   subject create|edit|search|print|ls|rm
   session [advance|reverse [--session <slug>]]
   sessions [print]
+  data ingest [--assets-dir <path>]
+  data ls
   status
   publish
-  ingest-photos
   rm-assets`)
 }
 
@@ -623,6 +624,109 @@ func cmdSessionsWithArgs(args []string) error {
 		return errors.New("no protocol steps found")
 	}
 	return runSessionsSwitchboard(root, protocol)
+}
+
+func cmdData(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: sg data ingest [--assets-dir <path>] | ls")
+	}
+	switch args[0] {
+	case "ingest":
+		return cmdIngestPhotos(args[1:])
+	case "ls":
+		if len(args) > 1 {
+			return fmt.Errorf("unknown argument: %s", args[1])
+		}
+		return cmdDataLs()
+	default:
+		return fmt.Errorf("unknown data subcommand: %s", args[0])
+	}
+}
+
+func cmdDataLs() error {
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return err
+	}
+	sessionRoot := filepath.Join(root, "session")
+	type dataAssetRow struct {
+		Session string
+		Step    string
+		File    string
+	}
+	rows := make([]dataAssetRow, 0)
+	walkErr := filepath.WalkDir(sessionRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(sessionRoot, path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) < 5 {
+			return nil
+		}
+		if parts[1] != "step" || parts[3] != "asset" {
+			return nil
+		}
+		rows = append(rows, dataAssetRow{
+			Session: parts[0],
+			Step:    parts[2],
+			File:    strings.Join(parts[4:], "/"),
+		})
+		return nil
+	})
+	if walkErr != nil && !os.IsNotExist(walkErr) {
+		return walkErr
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Session != rows[j].Session {
+			return rows[i].Session < rows[j].Session
+		}
+		if rows[i].Step != rows[j].Step {
+			return rows[i].Step < rows[j].Step
+		}
+		return rows[i].File < rows[j].File
+	})
+
+	tblRows := make([]table.Row, 0, len(rows))
+	sessionWidth := len("SESSION")
+	stepWidth := len("STEP")
+	fileWidth := len("FILE")
+	for _, r := range rows {
+		tblRows = append(tblRows, table.Row{r.Session, r.Step, r.File})
+		if len(r.Session) > sessionWidth {
+			sessionWidth = len(r.Session)
+		}
+		if len(r.Step) > stepWidth {
+			stepWidth = len(r.Step)
+		}
+		if len(r.File) > fileWidth {
+			fileWidth = len(r.File)
+		}
+	}
+	tbl := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "SESSION", Width: max(12, sessionWidth)},
+			{Title: "STEP", Width: max(12, stepWidth)},
+			{Title: "FILE", Width: max(12, fileWidth)},
+		}),
+		table.WithWidth(max(80, sessionWidth+stepWidth+fileWidth+6)),
+		table.WithFocused(false),
+		table.WithHeight(max(2, len(tblRows)+1)),
+	)
+	tbl.SetRows(tblRows)
+	tbl.SetStyles(table.DefaultStyles())
+	fmt.Println(tbl.View())
+	fmt.Printf("assets total: %d\n", len(rows))
+	return nil
 }
 
 func cmdSessionsPrint() error {
@@ -1707,7 +1811,7 @@ func cmdIngestPhotos(args []string) error {
 		return err
 	}
 	if opts.AssetsDir == "" && runtime.GOOS != "darwin" {
-		return errors.New("sg ingest-photos is supported only on macOS in v1")
+		return errors.New("sg data ingest is supported only on macOS in v1")
 	}
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
@@ -1877,7 +1981,7 @@ func parseIngestPhotosArgs(args []string) (ingestPhotosOptions, error) {
 		case strings.HasPrefix(arg, "-"):
 			return opts, fmt.Errorf("unknown flag: %s", arg)
 		default:
-			return opts, errors.New("album name positional arguments are no longer supported; default mode scans Photos Library files directly or use --assets-dir <path>")
+			return opts, errors.New("album name positional arguments are no longer supported; default mode scans Photos Library files directly or use sg data ingest --assets-dir <path>")
 		}
 	}
 	return opts, nil

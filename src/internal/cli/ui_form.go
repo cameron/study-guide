@@ -118,8 +118,7 @@ func (m formModel) View() tea.View {
 
 func runForm(title string, fields []formField) (map[string]string, bool, error) {
 	m := newFormModel(title, fields)
-	p := tea.NewProgram(m)
-	res, err := p.Run()
+	res, err := runInteractiveProgram(m)
 	if err != nil {
 		return nil, false, err
 	}

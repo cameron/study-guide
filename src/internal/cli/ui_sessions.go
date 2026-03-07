@@ -132,7 +132,7 @@ func runSessionsSwitchboard(root string, protocol store.Protocol) error {
 	if err != nil {
 		return err
 	}
-	res, err := tea.NewProgram(m).Run()
+	res, err := runInteractiveProgram(m)
 	if err != nil {
 		return err
 	}

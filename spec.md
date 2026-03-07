@@ -183,7 +183,9 @@ Optional markdown body:
 
 `sg` is the executable.
 `sg init`, `sg subject create/edit`, `sg session`, and `sg sessions` are interactive.
-`sg session advance`, `sg sessions print`, `sg ingest-photos`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
+
+All interactive Bubble Tea flows must be launched through a single shared program runner configured with alternate-screen mode so `sg` takes over and restores the terminal cleanly.
+`sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg rm-assets`, `sg status`, and `sg publish` are non-interactive.
 
 ### `sg` (no args)
 DWIM entrypoint behavior:
@@ -345,7 +347,7 @@ Behavior:
 - if no active step exists, returns an error
 - prints resulting state (`reversed`) with session slug and step slug
 
-### `sg ingest-photos`
+### `sg data ingest`
 Purpose: copy photo assets into matching step `asset/` folders by capture time.
 
 Input source:
@@ -371,6 +373,16 @@ Rules:
 - duplicate handling: skip if same content already exists in target session
 - idempotent: re-running ingestion should not duplicate copied assets
 - prints per-session counts and one aggregate summary line
+
+### `sg data ls`
+Purpose: list ingested step assets for all sessions in the current study.
+
+Behavior:
+- non-interactive
+- scans all sessions under `<study-root>/session/`
+- prints one row per asset with columns `SESSION | STEP | FILE`
+- rows are sorted by `SESSION`, then `STEP`, then `FILE`
+- prints aggregate summary line with total assets
 
 ### `sg status`
 Reports missing/invalid data that affects publication:
@@ -490,7 +502,7 @@ All criteria below are pass/fail requirements for v1.
 23. `sg sessions print` outputs one timing row per protocol step per session in an aligned Bubble Tea table with `SESSION | STEP | START | END` columns.
 
 ### E. Photo Ingestion
-1. `sg ingest-photos` is non-interactive and runs against all sessions in the study.
+1. `sg data ingest` is non-interactive and runs against all sessions in the study.
 2. Input source modes:
 - default mode reads assets from Apple Photos on macOS.
 - `--assets-dir <path>` mode reads image files recursively from local filesystem (supported on all OSes).
@@ -512,8 +524,9 @@ All criteria below are pass/fail requirements for v1.
 10. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
 10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
 11. Output includes per-session ingest counts and aggregate totals.
-12. `sg ingest-photos --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
+12. `sg data ingest --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
     The canonical fixture directory for that asset set is `fixtures/study-complete-assets/`.
+13. `sg data ls` outputs one sorted row per ingested asset (`SESSION | STEP | FILE`) and an aggregate asset total.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.
@@ -560,8 +573,9 @@ All criteria below are pass/fail requirements for v1.
 - status issue detection for missing required fields/sections
 - ingest photo window matching and boundary behavior
 - ingest duplicate/idempotency behavior
-- ingest command behavior using `--assets-dir` fixtures against `fixtures/study-eg`
+- data ingest command behavior using `--assets-dir` fixtures against `fixtures/study-eg`
+- data ls output ordering and totals
 3. `go test ./...` passes in a clean checkout.
 4. Tests must not read from or write to the real global subject directory (`~/.study-guide/`); tests must use isolated temporary directories.
 5. TUI behavior tests should prefer stable contract and snapshot-style assertions (rendered text states and key layout invariants) over many micro-assertions of individual style properties.
-6. Tests should not rely on mutable repository fixture state (for example pre-populated asset counts in `fixtures/`); setup should generate required runtime state within the test (for example by running `sg ingest-photos` in a temp study).
+6. Tests should not rely on mutable repository fixture state (for example pre-populated asset counts in `fixtures/`); setup should generate required runtime state within the test (for example by running `sg data ingest` in a temp study).

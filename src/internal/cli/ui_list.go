@@ -64,7 +64,7 @@ func runSelect(title string, items []string) (string, bool, error) {
 	l.Title = title
 	l.SetShowHelp(true)
 	m := listModel{list: l}
-	res, err := tea.NewProgram(m).Run()
+	res, err := runInteractiveProgram(m)
 	if err != nil {
 		return "", false, err
 	}
