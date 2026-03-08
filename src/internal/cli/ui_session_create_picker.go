@@ -11,14 +11,14 @@ import (
 )
 
 type sessionCreatePickerModel struct {
-	subjects          []store.Subject
-	selectedBySubject map[string]bool
-	createLookup      map[string]string
-	list              list.Model
-	message           string
+	subjects             []store.Subject
+	selectedBySubject    map[string]bool
+	createLookup         map[string]string
+	list                 list.Model
+	message              string
 	requestCreateSubject bool
-	canceled          bool
-	done              bool
+	canceled             bool
+	done                 bool
 }
 
 func newSessionCreatePickerModel(subjects []store.Subject, selectedBySubject map[string]bool) sessionCreatePickerModel {
@@ -38,9 +38,15 @@ func newSessionCreatePickerModel(subjects []store.Subject, selectedBySubject map
 	m.list = list.New([]list.Item{}, delegate, 100, 18)
 	m.list.Title = "Create Session"
 	m.list.SetShowTitle(false)
+	m.list.SetShowFilter(false)
 	m.list.SetShowHelp(false)
 	m.list.SetShowStatusBar(false)
 	m.list.SetShowPagination(false)
+	m.list.FilterInput.Prompt = "Filter: "
+	m.list.FilterInput.Placeholder = sessionsCreateFilterPlaceholder
+	m.list.FilterInput.CharLimit = 120
+	m.list.FilterInput.Focus()
+	applyFilterInputAccentStyle(&m.list.FilterInput)
 	m.refreshList()
 	return m
 }
@@ -57,7 +63,7 @@ func (m *sessionCreatePickerModel) refreshList() {
 				marker = "[x]"
 			}
 			label := sessionsCreateItemLabel(fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0]))
-			items = append(items, listItem(label))
+			items = append(items, labeledListItem{title: label, filter: s.Name})
 			m.createLookup[label] = "subject:" + s.UUID
 		}
 	}
@@ -75,17 +81,19 @@ func (m sessionCreatePickerModel) Init() tea.Cmd { return nil }
 func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		startListFilteringOnTextInputWithoutInlineFilter(&m.list, msg)
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			m.canceled = true
 			m.done = true
 			return m, tea.Quit
+		case "shift+enter", "shift+return":
+			return m.handleCreateShortcut()
 		case "enter":
-			it, ok := m.list.SelectedItem().(listItem)
+			choice, ok := selectedListItemTitle(m.list.SelectedItem())
 			if !ok {
 				return m, nil
 			}
-			choice := string(it)
 			switch token := m.createLookup[choice]; token {
 			case "create-subject":
 				m.requestCreateSubject = true
@@ -109,17 +117,21 @@ func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	oldFilter := m.list.FilterValue()
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	autoSelectTopEntryInFilteredList(&m.list, oldFilter)
+	resetListFilterIfEmpty(&m.list)
 	return m, cmd
 }
 
 func (m sessionCreatePickerModel) View() tea.View {
 	var b strings.Builder
-	header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
-	b.WriteString(header)
+	b.WriteString(renderScreenTitle("Create Session"))
 	b.WriteString("\n")
 	b.WriteString(subtleTextStyle.Render(sessionsCreateItemLabel(sessionsCreateInfoText)))
+	b.WriteString("\n")
+	b.WriteString(m.list.FilterInput.View())
 	b.WriteString("\n")
 	b.WriteString(m.list.View())
 	if strings.TrimSpace(m.message) != "" {
@@ -127,6 +139,15 @@ func (m sessionCreatePickerModel) View() tea.View {
 		b.WriteString(subtleTextStyle.Render(m.message))
 	}
 	return tea.NewView(b.String())
+}
+
+func (m sessionCreatePickerModel) handleCreateShortcut() (tea.Model, tea.Cmd) {
+	if len(m.SelectedSubjects()) == 0 {
+		m.message = "select at least one subject before Create"
+		return m, nil
+	}
+	m.done = true
+	return m, tea.Quit
 }
 
 func (m sessionCreatePickerModel) SelectedSubjects() []store.Subject {

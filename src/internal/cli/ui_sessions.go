@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 
 	"study-guide/src/internal/store"
@@ -52,14 +53,14 @@ type sessionsSwitchboardModel struct {
 	browseRecords []sessionRecord
 	browseEntries []browseEntry
 
-	createLookup      map[string]string
-	actionCursor      sessionActionCursor
-	activeSessionSlug string
+	createLookup           map[string]string
+	actionCursor           sessionActionCursor
+	activeSessionSlug      string
 	finishedSessionCount   int
 	inProgressSessionCount int
-	subjects          []store.Subject
-	selectedBySubject map[string]bool
-	publishFunc       func(string) error
+	subjects               []store.Subject
+	selectedBySubject      map[string]bool
+	publishFunc            func(string) error
 
 	message string
 	err     error
@@ -67,18 +68,23 @@ type sessionsSwitchboardModel struct {
 }
 
 var subtleTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-var brightHintStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-var focusedTokenPattern = regexp.MustCompile(`\{[^{}\n]+\}`)
-var actionCellTokenPattern = regexp.MustCompile("\x1e([^\x1e\x1f\n]*)\x1f")
-const actionCellANSIPrefix = "\x1b[38;5;120;48;5;22m"
-const actionCellANSISuffix = "\x1b[0m"
-const focusedTokenANSIPrefix = "\x1b[1;38;5;255;48;5;34m"
-const focusedTokenANSISuffix = "\x1b[0m"
+var filterPromptStyle = lipgloss.NewStyle().Foreground(paletteBlueAccentAdaptive)
+var filterQueryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+var filterPlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+var selectedRowTintLight = color.RGBA{R: 0xd9, G: 0xdc, B: 0xef, A: 0xff}
+var selectedRowTintDark = color.RGBA{R: 0x26, G: 0x2b, B: 0x3a, A: 0xff}
+
+const selectedRowBackgroundANSILight = "\x1b[48;2;217;220;239m"
+const selectedRowBackgroundANSIDark = "\x1b[48;2;38;43;58m"
 
 const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
+const sessionsBrowseFilterPlaceholder = "by subject or slug"
+const sessionsCreateFilterPlaceholder = "by subject name"
 const sessionsCreateItemIndent = "  "
 const sessionsCreateActionCreateSubject = "(+) New subject"
 const sessionsCreateActionCreateSession = "-> Create Session"
+const emptyActionCellSpaceFill = 8
+const focusedActionMarker = "↳ "
 
 type sessionActionCursor string
 
@@ -95,7 +101,60 @@ func sessionsCreateItemLabel(label string) string {
 	return sessionsCreateItemIndent + label
 }
 
-func newCreateListDelegate() list.DefaultDelegate {
+type createListDelegate struct {
+	list.DefaultDelegate
+}
+
+func createListShouldUseSelectedStyle(filterState list.FilterState, filterValue string, isSelected bool) bool {
+	if !isSelected {
+		return false
+	}
+	if filterState == list.Filtering && strings.TrimSpace(filterValue) == "" {
+		return false
+	}
+	return true
+}
+
+func (d createListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	var title string
+	if i, ok := item.(list.DefaultItem); ok {
+		title = i.Title()
+	} else {
+		return
+	}
+	if m.Width() <= 0 {
+		return
+	}
+	s := &d.Styles
+	textWidth := m.Width() - s.NormalTitle.GetPaddingLeft() - s.NormalTitle.GetPaddingRight()
+	title = ansi.Truncate(title, textWidth, "…")
+	isSelected := index == m.Index()
+	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
+	useSelected := createListShouldUseSelectedStyle(m.FilterState(), m.FilterValue(), isSelected)
+	matchedRunes := m.MatchesForItem(index)
+
+	if m.FilterState() == list.Filtering && strings.TrimSpace(m.FilterValue()) == "" {
+		fmt.Fprint(w, s.DimmedTitle.Render(title)) //nolint:errcheck
+		return
+	}
+	if useSelected {
+		if isFiltered {
+			unmatched := s.SelectedTitle.Inline(true)
+			matched := unmatched.Inherit(s.FilterMatch)
+			title = lipgloss.StyleRunes(title, matchedRunes, matched, unmatched)
+		}
+		fmt.Fprint(w, s.SelectedTitle.Render(title)) //nolint:errcheck
+		return
+	}
+	if isFiltered {
+		unmatched := s.NormalTitle.Inline(true)
+		matched := unmatched.Inherit(s.FilterMatch)
+		title = lipgloss.StyleRunes(title, matchedRunes, matched, unmatched)
+	}
+	fmt.Fprint(w, s.NormalTitle.Render(title)) //nolint:errcheck
+}
+
+func newCreateListDelegate() createListDelegate {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = false
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Padding(0, 0, 0, 0)
@@ -103,28 +162,66 @@ func newCreateListDelegate() list.DefaultDelegate {
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
 		Border(lipgloss.NormalBorder(), false, false, false, false).
 		Padding(0, 0, 0, 0)
-	return delegate
+	return createListDelegate{DefaultDelegate: delegate}
 }
 
 func newSessionsFilterInput() textinput.Model {
 	fi := textinput.New()
 	fi.Prompt = " filter: "
-	fi.Placeholder = "by subject or slug"
+	fi.Placeholder = sessionsBrowseFilterPlaceholder
 	fi.CharLimit = 120
 	fi.SetWidth(60)
 	fi.Focus()
+	applyFilterInputAccentStyle(&fi)
 	return fi
+}
+
+func applyFilterInputAccentStyle(input *textinput.Model) {
+	styles := input.Styles()
+	styles.Focused.Prompt = filterPromptStyle
+	styles.Blurred.Prompt = filterPromptStyle
+	styles.Focused.Text = filterQueryStyle
+	styles.Blurred.Text = filterQueryStyle
+	styles.Focused.Placeholder = filterPlaceholderStyle
+	styles.Blurred.Placeholder = filterPlaceholderStyle
+	input.SetStyles(styles)
 }
 
 func sessionsSelectedRowStyle(base lipgloss.Style) lipgloss.Style {
 	return base.
-		Foreground(lipgloss.NoColor{}).
-		Background(compat.AdaptiveColor{
-			Light: color.RGBA{R: 0xd9, G: 0xdc, B: 0xef, A: 0xff},
-			Dark:  color.RGBA{R: 0x26, G: 0x2b, B: 0x3a, A: 0xff},
-		}).
-		Reverse(false).
 		Bold(false)
+}
+
+func actionCellStyle(isFocused bool) lipgloss.Style {
+	fg := lipgloss.Color("255")
+	bg := compat.AdaptiveColor{
+		Light: color.RGBA{R: 0x02, G: 0x68, B: 0x46, A: 0xff},
+		Dark:  color.RGBA{R: 0x4f, G: 0x61, B: 0x22, A: 0xff},
+	}
+	if isFocused {
+		bg = compat.AdaptiveColor{
+			Light: color.RGBA{R: 0x04, G: 0xb5, B: 0x75, A: 0xff},
+			Dark:  color.RGBA{R: 0x93, G: 0xad, B: 0x3f, A: 0xff},
+		}
+	}
+	return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(isFocused)
+}
+
+func selectedRowBackgroundANSI() string {
+	if compat.HasDarkBackground {
+		return selectedRowBackgroundANSIDark
+	}
+	return selectedRowBackgroundANSILight
+}
+
+func renderActionCell(text string, isFocused, inSelectedRow bool, width int) string {
+	if text == "" {
+		text = strings.Repeat(" ", emptyActionCellSpaceFill)
+	}
+	out := actionCellStyle(isFocused).Render(text)
+	_ = inSelectedRow
+	_ = width
+	return out
 }
 
 func runSessionsSwitchboard(root string, protocol store.Protocol) error {
@@ -194,7 +291,7 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
-		case "ctrl+n", "shift+enter", "shift+return":
+		case "ctrl+n":
 			if m.view == sessionsViewBrowse {
 				subs, err := store.ListSubjects()
 				if err != nil {
@@ -206,6 +303,22 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshCreateList()
 				m.message = ""
 				return m, nil
+			}
+		case "shift+enter", "shift+return":
+			if m.view == sessionsViewBrowse {
+				subs, err := store.ListSubjects()
+				if err != nil {
+					m.err = err
+					return m, tea.Quit
+				}
+				m.subjects = subs
+				m.selectedBySubject = map[string]bool{}
+				m.refreshCreateList()
+				m.message = ""
+				return m, nil
+			}
+			if m.view == sessionsViewCreate {
+				return m.handleCreateShortcut()
 			}
 		case "esc":
 			switch m.view {
@@ -238,13 +351,13 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		case "left", "h":
+		case "left":
 			if m.view == sessionsViewBrowse {
 				m.moveActionCursorLeft()
 				m.applyBrowseEntries()
 				return m, nil
 			}
-		case "right", "l":
+		case "right":
 			if m.view == sessionsViewBrowse {
 				m.moveActionCursorRight()
 				m.applyBrowseEntries()
@@ -273,18 +386,25 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmdFilter, cmdTable)
 	}
 
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		startListFilteringOnTextInputWithoutInlineFilter(&m.list, key)
+	}
+	oldFilter := m.list.FilterValue()
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	autoSelectTopEntryInFilteredList(&m.list, oldFilter)
+	resetListFilterIfEmpty(&m.list)
 	return m, cmd
 }
 
 func (m sessionsSwitchboardModel) View() tea.View {
 	if m.view == sessionsViewCreate {
 		var b strings.Builder
-		header := m.list.Styles.TitleBar.Render(m.list.Styles.Title.Render("Create Session"))
-		b.WriteString(header)
+		b.WriteString(renderScreenTitle("Create Session"))
 		b.WriteString("\n")
 		b.WriteString(subtleTextStyle.Render(sessionsCreateItemLabel(sessionsCreateInfoText)))
+		b.WriteString("\n")
+		b.WriteString(m.list.FilterInput.View())
 		b.WriteString("\n")
 		b.WriteString(m.list.View())
 		if strings.TrimSpace(m.message) != "" {
@@ -294,43 +414,14 @@ func (m sessionsSwitchboardModel) View() tea.View {
 		return tea.NewView(b.String())
 	}
 
-	current := "current step: -"
-	if entry, ok := m.selectedBrowseEntry(); ok && entry.kind == browseEntrySession {
-		if entry.record.CurrentStep != "" {
-			current = "current step: " + entry.record.CurrentStep
-		} else if entry.record.NextAction == "start" && entry.record.NextStep != "" {
-			current = "current step: (not started)"
-		}
-	}
-
 	var b strings.Builder
-	b.WriteString("Sessions")
-	b.WriteString("\n")
-	focusedLabel := "focused session: -"
-	if strings.TrimSpace(m.activeSessionSlug) != "" {
-		focusedLabel = "focused session: " + m.activeSessionSlug
-	}
-	b.WriteString(subtleTextStyle.Render(focusedLabel))
-	b.WriteString("\n")
+	b.WriteString(renderScreenTitle("Sessions"))
 	b.WriteString("\n")
 	b.WriteString(m.filter.View())
 	b.WriteString("\n")
-	tableView := m.table.View()
-	tableView = styleBrowseActionCells(tableView)
-	tableView = styleBrowseFocusedTokens(tableView)
-	b.WriteString(tableView)
+	b.WriteString(m.table.View())
 	b.WriteString("\n")
-	b.WriteString(subtleTextStyle.Render(current))
-	if strings.TrimSpace(m.message) != "" {
-		b.WriteString("\n")
-		b.WriteString(subtleTextStyle.Render(m.message))
-	}
-	b.WriteString("\n")
-	footer := subtleTextStyle.Render("ctrl+n to create new; esc to quit")
-	if m.canPublishFromBrowse() {
-		footer += "  " + brightHintStyle.Render(fmt.Sprintf("p publish with %d sessions", m.finishedSessionCount))
-	}
-	b.WriteString(footer)
+	b.WriteString(subtleTextStyle.Render("enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit"))
 	return tea.NewView(b.String())
 }
 
@@ -343,25 +434,25 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 	switch entry.kind {
 	case browseEntryEmpty:
 		return m, nil
-		case browseEntrySession:
-			rec := entry.record
-			if rec.NextAction == "invalid" {
-				m.message = "invalid: " + rec.InvalidReason
-				return m, nil
-			}
-			if m.actionCursor == sessionActionCursorFocus {
-				now := util.NowTimestamp()
-				if strings.TrimSpace(m.activeSessionSlug) != "" && m.activeSessionSlug != rec.Slug {
-					if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
-						m.message = "focus failed: " + err.Error()
-						return m, nil
-					}
-				}
-				if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
+	case browseEntrySession:
+		rec := entry.record
+		if rec.NextAction == "invalid" {
+			m.message = "invalid: " + rec.InvalidReason
+			return m, nil
+		}
+		if m.actionCursor == sessionActionCursorFocus {
+			now := util.NowTimestamp()
+			if strings.TrimSpace(m.activeSessionSlug) != "" && m.activeSessionSlug != rec.Slug {
+				if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
 					m.message = "focus failed: " + err.Error()
 					return m, nil
 				}
-				if rec.NextAction == "start" && rec.ProgressSteps == 0 {
+			}
+			if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
+				m.message = "focus failed: " + err.Error()
+				return m, nil
+			}
+			if rec.NextAction == "start" && rec.ProgressSteps == 0 {
 				res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
 				if err != nil {
 					m.message = "focus failed: " + err.Error()
@@ -371,17 +462,21 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 					m.err = err
 					return m, tea.Quit
 				}
-					m.message = fmt.Sprintf("session=%s state=focused+%s step=%s", rec.Slug, res.State, res.StepSlug)
-					return m, nil
-				}
-				if err := syncFocusedSessionWindows(m.root, rec.Slug, m.protocol, now); err != nil {
-					m.message = "focus failed: " + err.Error()
-					return m, nil
-				}
-				if err := m.refreshBrowseList(); err != nil {
-					m.err = err
-					return m, tea.Quit
-				}
+				m.table.SetCursor(0)
+				m.applyBrowseEntries()
+				m.message = fmt.Sprintf("session=%s state=focused+%s step=%s", rec.Slug, res.State, res.StepSlug)
+				return m, nil
+			}
+			if err := syncFocusedSessionWindows(m.root, rec.Slug, m.protocol, now); err != nil {
+				m.message = "focus failed: " + err.Error()
+				return m, nil
+			}
+			if err := m.refreshBrowseList(); err != nil {
+				m.err = err
+				return m, tea.Quit
+			}
+			m.table.SetCursor(0)
+			m.applyBrowseEntries()
 			m.message = fmt.Sprintf("session=%s state=focused", rec.Slug)
 			return m, nil
 		}
@@ -425,29 +520,13 @@ func (m sessionsSwitchboardModel) handleBrowseReverse() (tea.Model, tea.Cmd) {
 }
 
 func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
-	it, ok := m.list.SelectedItem().(listItem)
+	choice, ok := selectedListItemTitle(m.list.SelectedItem())
 	if !ok {
 		return m, nil
 	}
-	choice := string(it)
 	switch token := m.createLookup[choice]; token {
 	case "create":
-		selected := m.selectedSubjects()
-		if len(selected) == 0 {
-			m.message = "select at least one subject before Create"
-			return m, nil
-		}
-		slug, _, err := createSessionScaffold(m.root, selected)
-		if err != nil {
-			m.message = "create failed: " + err.Error()
-			return m, nil
-		}
-		if err := m.refreshBrowseList(); err != nil {
-			m.err = err
-			return m, tea.Quit
-		}
-		m.message = "session created: " + slug
-		return m, nil
+		return m.handleCreateShortcut()
 	case "create-subject":
 		if err := subjectCreateWithStudyRoot(m.root); err != nil {
 			m.message = "create subject failed: " + err.Error()
@@ -471,6 +550,25 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 		m.message = ""
 		return m, nil
 	}
+}
+
+func (m sessionsSwitchboardModel) handleCreateShortcut() (tea.Model, tea.Cmd) {
+	selected := m.selectedSubjects()
+	if len(selected) == 0 {
+		m.message = "select at least one subject before Create"
+		return m, nil
+	}
+	slug, _, err := createSessionScaffold(m.root, selected)
+	if err != nil {
+		m.message = "create failed: " + err.Error()
+		return m, nil
+	}
+	if err := m.refreshBrowseList(); err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.message = "session created: " + slug
+	return m, nil
 }
 
 func (m *sessionsSwitchboardModel) refreshBrowseList() error {
@@ -667,12 +765,6 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if strings.TrimSpace(next) == "" {
 			next = "-"
 		}
-		focusBaseText := ""
-		if rec.Active {
-			focusBaseText = "focused"
-		}
-		focusStyled := encodeActionCellToken(focusBaseText)
-		nextStyled := encodeActionCellToken(next)
 		selectedSlug := ""
 		if sel, ok := m.selectedBrowseEntry(); ok && sel.kind == browseEntrySession {
 			selectedSlug = sel.record.Slug
@@ -680,19 +772,37 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if selectedSlug == "" && len(m.browseEntries) > 0 && m.browseEntries[0].kind == browseEntrySession {
 			selectedSlug = m.browseEntries[0].record.Slug
 		}
-		if rec.Slug == selectedSlug {
+		focusWidth := 1
+		nextWidth := 1
+		cols := m.table.Columns()
+		if len(cols) >= 5 {
+			if cols[2].Width > 0 {
+				focusWidth = cols[2].Width
+			}
+			if cols[4].Width > 0 {
+				nextWidth = cols[4].Width
+			}
+		}
+		isSelected := rec.Slug == selectedSlug
+		focusBaseText := ""
+		if rec.Active {
+			focusBaseText = "focused"
+		}
+		focusStyled := renderActionCell(focusBaseText, false, isSelected, focusWidth)
+		nextStyled := renderActionCell(next, false, isSelected, nextWidth)
+		if isSelected {
 			if !rec.Active {
 				focusBaseText = ""
-				focusStyled = encodeActionCellToken(focusBaseText)
+				focusStyled = renderActionCell(focusBaseText, false, true, focusWidth)
 			}
 			if m.actionCursor == sessionActionCursorFocus {
 				if rec.Active {
-					focusStyled = encodeActionCellToken("{focused}")
+					focusStyled = renderActionCell(focusedActionMarker+"focused", true, true, focusWidth)
 				} else {
-					focusStyled = encodeActionCellToken("{focus}")
+					focusStyled = renderActionCell(focusedActionMarker+"focus", true, true, focusWidth)
 				}
 			} else {
-				nextStyled = encodeActionCellToken("{" + next + "}")
+				nextStyled = renderActionCell(focusedActionMarker+next, true, true, nextWidth)
 			}
 			return rec.Slug, subjectText, focusStyled, stepText, nextStyled
 		}
@@ -725,7 +835,7 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 				marker = "[x]"
 			}
 			label := sessionsCreateItemLabel(fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0]))
-			items = append(items, listItem(label))
+			items = append(items, labeledListItem{title: label, filter: s.Name})
 			m.createLookup[label] = "subject:" + s.UUID
 		}
 	}
@@ -740,9 +850,15 @@ func (m *sessionsSwitchboardModel) refreshCreateList() {
 	m.list = list.New(items, delegate, 100, 18)
 	m.list.Title = "Create Session"
 	m.list.SetShowTitle(false)
+	m.list.SetShowFilter(false)
 	m.list.SetShowHelp(false)
 	m.list.SetShowStatusBar(false)
 	m.list.SetShowPagination(false)
+	m.list.FilterInput.Prompt = "Filter: "
+	m.list.FilterInput.Placeholder = sessionsCreateFilterPlaceholder
+	m.list.FilterInput.CharLimit = 120
+	m.list.FilterInput.Focus()
+	applyFilterInputAccentStyle(&m.list.FilterInput)
 	m.view = sessionsViewCreate
 }
 
@@ -790,20 +906,6 @@ func readActiveSessionSlug(root string) (string, error) {
 func setActiveSessionSlug(root, sessionSlug string) error {
 	studyPath := filepath.Join(root, "study.sg.md")
 	return setFrontmatterField(studyPath, "active_session_slug", sessionSlug)
-}
-
-func styleBrowseFocusedTokens(s string) string {
-	return focusedTokenPattern.ReplaceAllStringFunc(s, func(token string) string {
-		return focusedTokenANSIPrefix + token + focusedTokenANSISuffix
-	})
-}
-
-func styleBrowseActionCells(s string) string {
-	return actionCellTokenPattern.ReplaceAllString(s, actionCellANSIPrefix+"$1"+actionCellANSISuffix)
-}
-
-func encodeActionCellToken(s string) string {
-	return "\x1e" + s + "\x1f"
 }
 
 func max(a, b int) int {

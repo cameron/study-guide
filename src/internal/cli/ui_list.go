@@ -14,6 +14,15 @@ func (i listItem) FilterValue() string { return string(i) }
 func (i listItem) Title() string       { return string(i) }
 func (i listItem) Description() string { return "" }
 
+type labeledListItem struct {
+	title  string
+	filter string
+}
+
+func (i labeledListItem) FilterValue() string { return i.filter }
+func (i labeledListItem) Title() string       { return i.title }
+func (i labeledListItem) Description() string { return "" }
+
 type listModel struct {
 	list     list.Model
 	selected string
@@ -26,18 +35,14 @@ func (m listModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		// Start filtering immediately when typing, without requiring "/".
-		if !m.list.SettingFilter() && msg.Text != "" && hasNonSpaceText(msg.Text) {
-			m.list.SetShowFilter(true)
-			m.list.SetFilteringEnabled(true)
-			m.list.SetFilterState(list.Filtering)
-		}
+		startListFilteringOnTextInput(&m.list, msg)
 		switch msg.String() {
 		case "enter":
 			if m.list.SettingFilter() {
 				break
 			}
-			if it, ok := m.list.SelectedItem().(listItem); ok {
-				m.selected = string(it)
+			if title, ok := selectedListItemTitle(m.list.SelectedItem()); ok {
+				m.selected = title
 			}
 			return m, tea.Quit
 		case "esc", "ctrl+c":
@@ -85,4 +90,51 @@ func hasNonSpaceText(text string) bool {
 		}
 	}
 	return false
+}
+
+func startListFilteringOnTextInput(l *list.Model, key tea.KeyPressMsg) {
+	if l.SettingFilter() || key.Text == "" || !hasNonSpaceText(key.Text) {
+		return
+	}
+	l.SetShowFilter(true)
+	l.SetFilteringEnabled(true)
+	l.SetFilterState(list.Filtering)
+}
+
+func startListFilteringOnTextInputWithoutInlineFilter(l *list.Model, key tea.KeyPressMsg) {
+	if l.SettingFilter() || key.Text == "" || !hasNonSpaceText(key.Text) {
+		return
+	}
+	l.SetFilteringEnabled(true)
+	l.SetFilterState(list.Filtering)
+}
+
+func resetListFilterIfEmpty(l *list.Model) {
+	if l.SettingFilter() && l.FilterValue() == "" {
+		l.ResetFilter()
+	}
+}
+
+func autoSelectTopEntryInFilteredList(l *list.Model, prevFilter string) {
+	if !l.SettingFilter() {
+		return
+	}
+	if l.FilterValue() != prevFilter {
+		l.ResetSelected()
+		return
+	}
+	if l.SelectedItem() == nil && len(l.VisibleItems()) > 0 {
+		l.ResetSelected()
+	}
+}
+
+func selectedListItemTitle(it list.Item) (string, bool) {
+	switch item := it.(type) {
+	case listItem:
+		return string(item), true
+	case labeledListItem:
+		return item.title, true
+	default:
+		return "", false
+	}
 }

@@ -33,6 +33,7 @@ func newFormModel(title string, fields []formField) formModel {
 		ti := textinput.New()
 		ti.Prompt = f.Label + ": "
 		ti.Placeholder = f.Name
+		ti.SetWidth(max(len(ti.Placeholder), 40))
 		ti.SetValue(f.Value)
 		ti.Focus()
 		if f.ReadOnly {
@@ -104,7 +105,8 @@ func (m formModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m formModel) View() tea.View {
 	var b strings.Builder
-	b.WriteString(m.title + "\n\n")
+	b.WriteString(renderScreenTitle(m.title))
+	b.WriteString("\n\n")
 	for _, in := range m.inputs {
 		b.WriteString(in.View())
 		b.WriteString("\n")

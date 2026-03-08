@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/table"
 	"github.com/go-pdf/fpdf"
@@ -24,8 +25,10 @@ import (
 )
 
 var (
-	cmdInitRunner     = cmdInit
-	cmdSessionsRunner = cmdSessions
+	cmdInitRunner                 = cmdInit
+	cmdSessionsRunner             = cmdSessions
+	runFormRunner                 = runForm
+	runProtocolTitlesPromptRunner = runProtocolTitlesPrompt
 )
 
 func Run(args []string) int {
@@ -118,9 +121,9 @@ func cmdInit() error {
 	if err != nil {
 		return err
 	}
-	vals, canceled, err := runForm("Initialize Study", []formField{
-		{Name: "study_name", Label: "Study Name", Required: true},
-		{Name: "protocol_outline", Label: "Protocol Steps (one per line, optional: name | description)", Required: false},
+	defaultStudyName := deriveStudyNameFromDir(cwd)
+	vals, canceled, err := runFormRunner("Initialize Study", []formField{
+		{Name: "study_name", Label: "Study Name", Required: true, Value: defaultStudyName},
 	})
 	if err != nil {
 		return err
@@ -131,16 +134,26 @@ func cmdInit() error {
 	}
 	studyName := strings.TrimSpace(vals["study_name"])
 	if studyName == "" {
+		studyName = defaultStudyName
+	}
+	if studyName == "" {
 		return errors.New("study name is required")
 	}
-	outlineSteps := parseOutlineSteps(vals["protocol_outline"])
-	if len(outlineSteps) == 0 {
-		outlineSteps = []protocolOutlineStep{{Name: "First Step"}}
+	protocolSteps, canceled, err := runProtocolTitlesPromptRunner()
+	if err != nil {
+		return err
+	}
+	if canceled {
+		fmt.Println("canceled")
+		return nil
+	}
+	if len(protocolSteps) == 0 {
+		return errors.New("at least one protocol step is required")
 	}
 	if err := ensureStudyFile(filepath.Join(cwd, "study.sg.md"), studyName); err != nil {
 		return err
 	}
-	if err := ensureProtocolFile(filepath.Join(cwd, "protocol.sg.md"), outlineSteps); err != nil {
+	if err := ensureProtocolFile(filepath.Join(cwd, "protocol.sg.md"), protocolSteps); err != nil {
 		return err
 	}
 	if err := ensureFile(filepath.Join(cwd, "subject-requirements.yaml"), "type: person\n"); err != nil {
@@ -153,42 +166,26 @@ func cmdInit() error {
 	return nil
 }
 
-type protocolOutlineStep struct {
-	Name        string
-	Description string
+func deriveStudyNameFromDir(cwd string) string {
+	dir := strings.TrimSpace(filepath.Base(cwd))
+	if dir == "" || dir == "." {
+		return ""
+	}
+	dir = strings.NewReplacer("-", " ", "_", " ").Replace(dir)
+	parts := strings.Fields(dir)
+	for i, part := range parts {
+		parts[i] = titleWord(part)
+	}
+	return strings.Join(parts, " ")
 }
 
-func parseOutlineSteps(raw string) []protocolOutlineStep {
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
-	lines := strings.Split(raw, "\n")
-	steps := make([]protocolOutlineStep, 0, len(lines))
-	for _, line := range lines {
-		for _, part := range strings.Split(line, ",") {
-			step, ok := parseOutlineStep(part)
-			if ok {
-				steps = append(steps, step)
-			}
-		}
+func titleWord(s string) string {
+	if s == "" {
+		return s
 	}
-	return steps
-}
-
-func parseOutlineStep(raw string) (protocolOutlineStep, bool) {
-	part := strings.TrimSpace(raw)
-	if part == "" {
-		return protocolOutlineStep{}, false
-	}
-	name := part
-	desc := ""
-	if strings.Contains(part, "|") {
-		p := strings.SplitN(part, "|", 2)
-		name = strings.TrimSpace(p[0])
-		desc = strings.TrimSpace(p[1])
-	}
-	if name == "" {
-		return protocolOutlineStep{}, false
-	}
-	return protocolOutlineStep{Name: name, Description: desc}, true
+	runes := []rune(strings.ToLower(s))
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
 }
 
 func ensureFile(path, content string) error {
@@ -210,23 +207,19 @@ func ensureStudyFile(path, studyName string) error {
 	return util.WriteFrontmatterFile(path, fm, body)
 }
 
-func ensureProtocolFile(path string, steps []protocolOutlineStep) error {
+func ensureProtocolFile(path string, steps []string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
 	var b strings.Builder
 	b.WriteString("# Protocol Summary\n\nDescribe the protocol.\n\n# Steps\n\n")
 	for _, s := range steps {
-		if strings.TrimSpace(s.Name) == "" {
+		if strings.TrimSpace(s) == "" {
 			continue
 		}
 		b.WriteString("## ")
-		b.WriteString(s.Name)
+		b.WriteString(strings.TrimSpace(s))
 		b.WriteString("\n\n")
-		if strings.TrimSpace(s.Description) != "" {
-			b.WriteString(s.Description)
-			b.WriteString("\n\n")
-		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

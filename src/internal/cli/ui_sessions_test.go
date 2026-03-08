@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,13 +16,161 @@ import (
 	"study-guide/src/internal/util"
 )
 
-func TestSessionsUI_SelectedRowStyle_UsesBackgroundTint(t *testing.T) {
-	st := sessionsSelectedRowStyle(table.DefaultStyles().Selected)
-	if _, ok := st.GetBackground().(lipgloss.NoColor); ok {
-		t.Fatalf("expected selected row background tint, got %T", st.GetBackground())
+func TestSessionsUI_SelectedRowStyle_UsesDefaultPinkWithoutBackgroundTint(t *testing.T) {
+	base := table.DefaultStyles().Selected
+	st := sessionsSelectedRowStyle(base)
+	if fmt.Sprint(st.GetForeground()) != fmt.Sprint(base.GetForeground()) {
+		t.Fatalf("expected selected row to keep Bubble default pink foreground, got %q", fmt.Sprint(st.GetForeground()))
 	}
-	if st.GetReverse() {
-		t.Fatalf("expected selected row reverse=false")
+	if _, ok := st.GetBackground().(lipgloss.NoColor); !ok {
+		t.Fatalf("expected selected row to avoid custom row background tint, got %T", st.GetBackground())
+	}
+}
+
+func TestSessionsUI_ActionCellStyling_DoesNotUseFullANSIReset(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:         sessionsViewBrowse,
+		actionCursor: sessionActionCursorFocus,
+		filter:       newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 20},
+				{Title: "SUBJECT", Width: 20},
+				{Title: "FOCUSED", Width: 12},
+				{Title: "STEP", Width: 24},
+				{Title: "NEXT", Width: 16},
+			}),
+			table.WithHeight(4),
+		),
+		browseRecords: []sessionRecord{
+			{
+				Slug:          "s1",
+				SubjectNames:  []string{"Alpha"},
+				ProgressSteps: 1,
+				StepCount:     3,
+				CurrentStep:   "Ground",
+				NextStep:      "Second Exposure",
+			},
+		},
+	}
+	m.table.SetWidth(120)
+	m.applyBrowseEntries()
+	out := m.View().Content
+	if strings.Contains(out, "\x1b[0m") {
+		t.Fatalf("expected no full ANSI reset in rendered output, got %q", out)
+	}
+
+	bgCount := countBackgroundANSI(out)
+	if bgCount < 2 {
+		t.Fatalf("expected background styling in actionable cells, bg_count=%d output=%q", bgCount, out)
+	}
+}
+
+func TestSessionsUI_ActionCellStyling_UsesHarmonizedMintGreenPalette(t *testing.T) {
+	unfocused := renderActionCell("focus", false, false, 12)
+	focused := renderActionCell("↳ focus", true, true, 12)
+
+	unfocusedBG := regexp.MustCompile(`\x1b\[[0-9;]*48;2;(2;104;70|79;97;34)m`)
+	if !unfocusedBG.MatchString(unfocused) {
+		t.Fatalf("expected harmonized unfocused mint-green background, got %q", unfocused)
+	}
+	lightFG := regexp.MustCompile(`\x1b\[[0-9;]*38;5;255[0-9;]*m`)
+	if !lightFG.MatchString(unfocused) {
+		t.Fatalf("expected light foreground text in unfocused action cell, got %q", unfocused)
+	}
+
+	focusedBG := regexp.MustCompile(`\x1b\[[0-9;]*48;2;(4;181;117|147;173;63)m`)
+	if !focusedBG.MatchString(focused) {
+		t.Fatalf("expected harmonized focused mint-green background, got %q", focused)
+	}
+	if !lightFG.MatchString(focused) {
+		t.Fatalf("expected light foreground text in focused action cell, got %q", focused)
+	}
+}
+
+func TestSessionsUI_SelectedRowBackground_DoesNotApplyCustomTintAfterFocusedActionCell(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:         sessionsViewBrowse,
+		actionCursor: sessionActionCursorFocus,
+		filter:       newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 20},
+				{Title: "SUBJECT", Width: 20},
+				{Title: "FOCUSED", Width: 12},
+				{Title: "STEP", Width: 24},
+				{Title: "NEXT", Width: 16},
+			}),
+			table.WithHeight(4),
+		),
+		browseRecords: []sessionRecord{
+			{
+				Slug:          "s1",
+				SubjectNames:  []string{"Alpha"},
+				ProgressSteps: 1,
+				StepCount:     3,
+				CurrentStep:   "Ground",
+				NextStep:      "Second Exposure",
+			},
+		},
+	}
+	m.table.SetWidth(120)
+	styles := table.DefaultStyles()
+	styles.Selected = sessionsSelectedRowStyle(styles.Selected)
+	m.table.SetStyles(styles)
+	m.applyBrowseEntries()
+	out := m.View().Content
+	idxFocus := strings.Index(out, focusedActionMarker+"focus")
+	idxStep := strings.Index(out, "[1/3] Ground")
+	if idxFocus < 0 || idxStep < 0 || idxStep <= idxFocus {
+		t.Fatalf("expected focused token before step text in output, got %q", stripANSI(out))
+	}
+	postFocus := out[idxFocus:]
+	if strings.Contains(postFocus, selectedRowBackgroundANSI()) {
+		t.Fatalf("did not expect custom selected-row background tint restoration after focused action cell, output=%q", out)
+	}
+}
+
+func TestSessionsUI_EmptyFocusedCell_RendersSpaceSoBackgroundIsVisible(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:         sessionsViewBrowse,
+		actionCursor: sessionActionCursorNextStep,
+		filter:       newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 20},
+				{Title: "SUBJECT", Width: 20},
+				{Title: "FOCUSED", Width: 12},
+				{Title: "STEP", Width: 24},
+				{Title: "NEXT", Width: 16},
+			}),
+			table.WithHeight(4),
+		),
+		browseRecords: []sessionRecord{
+			{
+				Slug:          "s1",
+				SubjectNames:  []string{"Alpha"},
+				ProgressSteps: 1,
+				StepCount:     3,
+				CurrentStep:   "Ground",
+				NextStep:      "Second Exposure",
+				Active:        false,
+			},
+		},
+	}
+	m.table.SetWidth(120)
+	m.applyBrowseEntries()
+	rows := m.table.Rows()
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	focusCell := rows[0][2]
+	plain := stripANSI(focusCell)
+	if plain != strings.Repeat(" ", 8) {
+		t.Fatalf("expected empty focus cell to be exactly 8 spaces, got %q", plain)
+	}
+	if countBackgroundANSI(focusCell) < 1 {
+		t.Fatalf("expected background style in empty focus cell, got %q", focusCell)
 	}
 }
 
@@ -34,6 +184,47 @@ func TestSessionsUI_FilterInputDefaults(t *testing.T) {
 	}
 	if !fi.Focused() {
 		t.Fatalf("expected filter input to be focused")
+	}
+	view := fi.View()
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;2;(120;240;255|20;144;160)m`).MatchString(view) {
+		t.Fatalf("expected turquoise prompt styling in filter input, got %q", view)
+	}
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;5;245m`).MatchString(view) {
+		t.Fatalf("expected dim placeholder styling in filter input, got %q", view)
+	}
+	fi.SetValue("alp")
+	typedView := fi.View()
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;5;212m`).MatchString(typedView) {
+		t.Fatalf("expected pink query styling in filter input when non-empty, got %q", typedView)
+	}
+}
+
+func TestSessionsUI_CreateFilterInput_UsesSharedAccentStyles(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		subjects:          []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha"}},
+		selectedBySubject: map[string]bool{},
+	}
+	m.refreshCreateList()
+	styles := m.list.FilterInput.Styles()
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;2;(120;240;255|20;144;160)m`).MatchString(styles.Focused.Prompt.Render("Filter: ")) {
+		t.Fatalf("expected turquoise prompt styling in create filter input")
+	}
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;5;245m`).MatchString(styles.Focused.Placeholder.Render("by subject name")) {
+		t.Fatalf("expected dim placeholder styling in create filter input")
+	}
+}
+
+func TestSessionCreatePicker_FilterInput_UsesSharedAccentStyles(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha"}},
+		map[string]bool{},
+	)
+	styles := m.list.FilterInput.Styles()
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;2;(120;240;255|20;144;160)m`).MatchString(styles.Focused.Prompt.Render("Filter: ")) {
+		t.Fatalf("expected turquoise prompt styling in shared picker filter input")
+	}
+	if !regexp.MustCompile(`\x1b\[[0-9;]*38;5;245m`).MatchString(styles.Focused.Placeholder.Render("by subject name")) {
+		t.Fatalf("expected dim placeholder styling in shared picker filter input")
 	}
 }
 
@@ -118,7 +309,7 @@ func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 	if slug != "18-02-2026-boehmer" || subject != "Cameron Boehmer" || step != "[2/3] Ground" {
 		t.Fatalf("unexpected unarmed row snapshot: %q | %q | %q", slug, subject, step)
 	}
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(focused))) != "{focus}" {
+	if strings.TrimSpace(stripInternalMarkers(stripANSI(focused))) != focusedActionMarker+"focus" {
 		t.Fatalf("unexpected focused focused-cell snapshot: %q", stripInternalMarkers(stripANSI(focused)))
 	}
 	if strings.TrimSpace(stripInternalMarkers(stripANSI(next))) != "Second Exposure" {
@@ -130,7 +321,7 @@ func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 	if strings.TrimSpace(stripInternalMarkers(stripANSI(focused))) != "" {
 		t.Fatalf("unexpected unfocused focused-cell snapshot: %q", stripInternalMarkers(stripANSI(focused)))
 	}
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(next))) != "{Second Exposure}" {
+	if strings.TrimSpace(stripInternalMarkers(stripANSI(next))) != focusedActionMarker+"Second Exposure" {
 		t.Fatalf("unexpected focused next-step snapshot: %q", stripInternalMarkers(stripANSI(next)))
 	}
 }
@@ -168,14 +359,14 @@ func TestSessionsUI_FocusInvariant_ExactlyOneActionCellHighlighted(t *testing.T)
 
 	_, _, focused, step, next := m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
 	assertSingleFocusedActionCell(t, focused, step, next)
-	if strings.Contains(stripANSI(step), "{") || strings.Contains(stripANSI(step), "}") {
+	if strings.Contains(stripANSI(step), focusedActionMarker) {
 		t.Fatalf("step column must never show focus markers, got %q", stripANSI(step))
 	}
 
 	m.actionCursor = sessionActionCursorNextStep
 	_, _, focused, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
 	assertSingleFocusedActionCell(t, focused, step, next)
-	if strings.Contains(stripANSI(step), "{") || strings.Contains(stripANSI(step), "}") {
+	if strings.Contains(stripANSI(step), focusedActionMarker) {
 		t.Fatalf("step column must never show focus markers, got %q", stripANSI(step))
 	}
 }
@@ -271,24 +462,24 @@ func TestSessionsUI_TableRowMapping_ActiveAndStepDoNotShift(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 table row, got %d", len(rows))
 	}
-	if stripInternalMarkers(rows[0][2]) != "{focused}" {
-		t.Fatalf("expected ACTIVE column focus token in col 3, got %q", stripInternalMarkers(rows[0][2]))
+	if strings.TrimSpace(stripANSI(rows[0][2])) != focusedActionMarker+"focused" {
+		t.Fatalf("expected ACTIVE column focus token in col 3, got %q", strings.TrimSpace(stripANSI(rows[0][2])))
 	}
 	if !strings.HasPrefix(rows[0][3], "[3/3]") {
 		t.Fatalf("expected STEP column progress text in col 4, got %q", rows[0][3])
 	}
-	if stripInternalMarkers(rows[0][4]) != "conclude" {
-		t.Fatalf("expected NEXT column conclude in col 5, got %q", stripInternalMarkers(rows[0][4]))
+	if strings.TrimSpace(stripANSI(rows[0][4])) != "conclude" {
+		t.Fatalf("expected NEXT column conclude in col 5, got %q", strings.TrimSpace(stripANSI(rows[0][4])))
 	}
 
 	m.actionCursor = sessionActionCursorNextStep
 	m.applyBrowseEntries()
 	rows = m.table.Rows()
-	if stripInternalMarkers(rows[0][2]) != "focused" {
-		t.Fatalf("expected ACTIVE column unfocused text in col 3, got %q", stripInternalMarkers(rows[0][2]))
+	if strings.TrimSpace(stripANSI(rows[0][2])) != "focused" {
+		t.Fatalf("expected ACTIVE column unfocused text in col 3, got %q", strings.TrimSpace(stripANSI(rows[0][2])))
 	}
-	if stripInternalMarkers(rows[0][4]) != "{conclude}" {
-		t.Fatalf("expected NEXT column focus token in col 5, got %q", stripInternalMarkers(rows[0][4]))
+	if strings.TrimSpace(stripANSI(rows[0][4])) != focusedActionMarker+"conclude" {
+		t.Fatalf("expected NEXT column focus token in col 5, got %q", strings.TrimSpace(stripANSI(rows[0][4])))
 	}
 }
 
@@ -352,7 +543,7 @@ func TestSessionsUI_ViewStylesFocusedTokensPostRender(t *testing.T) {
 	m.table.SetWidth(120)
 	m.applyBrowseEntries()
 	out := m.View().Content
-	if !strings.Contains(out, "{focus}") {
+	if !strings.Contains(out, focusedActionMarker+"focus") {
 		t.Fatalf("expected focused token in view output, got:\n%s", stripANSI(out))
 	}
 	if !strings.Contains(out, "\x1b[") {
@@ -367,7 +558,7 @@ func TestSessionsUI_View_DefaultActionCellsAreStyledAsCTA(t *testing.T) {
 		filter:       newSessionsFilterInput(),
 		browseEntries: []browseEntry{
 			{
-				kind: browseEntrySession,
+				kind:   browseEntrySession,
 				record: sessionRecord{Slug: "s1"},
 			},
 		},
@@ -396,12 +587,12 @@ func TestSessionsUI_View_DefaultActionCellsAreStyledAsCTA(t *testing.T) {
 	m.applyBrowseEntries()
 
 	out := m.View().Content
-	if count := strings.Count(out, actionCellANSIPrefix); count < 2 {
-		t.Fatalf("expected CTA styling in both ACTIVE and NEXT cells, prefix_count=%d", count)
+	if count := countBackgroundANSI(out); count < 2 {
+		t.Fatalf("expected background CTA styling in both ACTIVE and NEXT cells, bg_count=%d", count)
 	}
 }
 
-func TestSessionsUI_View_LayoutShowsHeaderFocusedAndFilterOrder(t *testing.T) {
+func TestSessionsUI_View_LayoutOmitsStatusLinesButShowsKeyHints(t *testing.T) {
 	m := sessionsSwitchboardModel{
 		view:              sessionsViewBrowse,
 		actionCursor:      sessionActionCursorFocus,
@@ -420,21 +611,83 @@ func TestSessionsUI_View_LayoutShowsHeaderFocusedAndFilterOrder(t *testing.T) {
 		),
 	}
 	out := stripANSI(m.View().Content)
-	wantOrder := []string{
-		"Sessions",
-		"focused session: s-focused",
-		" filter: ",
+	if !strings.Contains(out, "Sessions") {
+		t.Fatalf("expected Sessions title in output:\n%s", out)
 	}
-	last := -1
-	for _, token := range wantOrder {
-		idx := strings.Index(out, token)
-		if idx < 0 {
-			t.Fatalf("expected token %q in view output:\n%s", token, out)
+	if !strings.Contains(out, " filter: ") {
+		t.Fatalf("expected filter input in output:\n%s", out)
+	}
+	if !strings.Contains(out, "enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit") {
+		t.Fatalf("expected browse key hint footer in output:\n%s", out)
+	}
+	for _, hidden := range []string{
+		"focused session:",
+		"current step:",
+	} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("did not expect %q in browse output:\n%s", hidden, out)
 		}
-		if idx < last {
-			t.Fatalf("expected token order %v, got output:\n%s", wantOrder, out)
-		}
-		last = idx
+	}
+}
+
+func TestSessionsUI_View_LayoutOmitsSessionStateMessageLine(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewBrowse,
+		actionCursor:      sessionActionCursorFocus,
+		activeSessionSlug: "s-focused",
+		message:           "session=s-focused state=advanced step=ground",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 20},
+				{Title: "SUBJECT", Width: 20},
+				{Title: "FOCUSED", Width: 12},
+				{Title: "STEP", Width: 24},
+				{Title: "NEXT", Width: 16},
+			}),
+			table.WithRows([]table.Row{{"s-focused", "Alpha", "focused", "[1/2] Ground", "Second"}}),
+			table.WithHeight(4),
+		),
+	}
+
+	out := stripANSI(m.View().Content)
+	if strings.Contains(out, "session=s-focused state=advanced step=ground") {
+		t.Fatalf("did not expect session state message line in browse output:\n%s", out)
+	}
+}
+
+func TestSessionsUI_BrowseView_TitleHasBackgroundStyle(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table:  table.New(),
+	}
+	out := m.View().Content
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if countBackgroundANSI(firstLine) < 1 {
+		t.Fatalf("expected browse title line to include background ANSI style, got %q", firstLine)
+	}
+}
+
+func TestSessionsUI_CreateAndPicker_TitleHaveBackgroundStyle(t *testing.T) {
+	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
+
+	switchboard := sessionsSwitchboardModel{
+		subjects:          subjects,
+		selectedBySubject: map[string]bool{},
+	}
+	switchboard.refreshCreateList()
+	switchboardOut := switchboard.View().Content
+	switchboardTitle := strings.SplitN(switchboardOut, "\n", 2)[0]
+	if countBackgroundANSI(switchboardTitle) < 1 {
+		t.Fatalf("expected sessions create title to include background ANSI style, got %q", switchboardTitle)
+	}
+
+	picker := newSessionCreatePickerModel(subjects, map[string]bool{})
+	pickerOut := picker.View().Content
+	pickerTitle := strings.SplitN(pickerOut, "\n", 2)[0]
+	if countBackgroundANSI(pickerTitle) < 1 {
+		t.Fatalf("expected shared picker title to include background ANSI style, got %q", pickerTitle)
 	}
 }
 
@@ -483,6 +736,31 @@ func TestSessionsUI_ActionCursorMovesLeftRight(t *testing.T) {
 	m.moveActionCursorLeft()
 	if m.actionCursor != sessionActionCursorFocus {
 		t.Fatalf("expected left-arrow to move cursor back to ACTIVE, got %q", m.actionCursor)
+	}
+}
+
+func TestSessionsUI_BrowseFilter_AppendsLiteralLToQuery(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:         sessionsViewBrowse,
+		actionCursor: sessionActionCursorFocus,
+		filter:       newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 20},
+				{Title: "SUBJECT", Width: 20},
+				{Title: "FOCUSED", Width: 12},
+				{Title: "STEP", Width: 24},
+				{Title: "NEXT", Width: 16},
+			}),
+			table.WithRows([]table.Row{}),
+		),
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	m = updated.(sessionsSwitchboardModel)
+
+	if m.filter.Value() != "l" {
+		t.Fatalf("expected browse filter query to be l, got %q", m.filter.Value())
 	}
 }
 
@@ -666,6 +944,78 @@ func TestSessionsUI_FocusSwitch_ClosesPreviousWindowAndOpensNewWindow(t *testing
 	}
 }
 
+func TestSessionsUI_FocusSwitch_SelectsTopRowAfterFocusedSessionPinned(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\nactive_session_slug: s1\n---\n\n# Study\n")
+	mustWriteSessionFile(t, root, "s1", map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteSessionFile(t, root, "s2", map[string]any{
+		"subject_ids": []string{"sub-2"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", "s1", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", "s2", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:02:00 01-01-2026",
+	}, "")
+
+	m := sessionsSwitchboardModel{
+		root:              root,
+		protocol:          protocol,
+		view:              sessionsViewBrowse,
+		actionCursor:      sessionActionCursorFocus,
+		activeSessionSlug: "s1",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns([]table.Column{
+				{Title: "SLUG", Width: 1},
+				{Title: "SUBJECT", Width: 1},
+				{Title: "FOCUSED", Width: 1},
+				{Title: "STEP", Width: 1},
+				{Title: "NEXT", Width: 1},
+			}),
+			table.WithRows([]table.Row{
+				{"s1", "", "", "", ""},
+				{"s2", "", "", "", ""},
+			}),
+		),
+		browseEntries: []browseEntry{
+			{
+				kind: browseEntrySession,
+				record: sessionRecord{
+					Slug:       "s1",
+					NextAction: "advance",
+					Active:     true,
+				},
+			},
+			{
+				kind: browseEntrySession,
+				record: sessionRecord{
+					Slug:       "s2",
+					NextAction: "advance",
+				},
+			},
+		},
+	}
+	m.table.SetCursor(1)
+
+	updated, _ := m.handleBrowseEnter()
+	got := updated.(sessionsSwitchboardModel)
+	if got.table.Cursor() != 0 {
+		t.Fatalf("expected selected row cursor to move to top after focusing, got %d", got.table.Cursor())
+	}
+	entry, ok := got.selectedBrowseEntry()
+	if !ok || entry.kind != browseEntrySession {
+		t.Fatalf("expected selected browse entry to exist")
+	}
+	if entry.record.Slug != "s2" {
+		t.Fatalf("expected selected row to be focused top session s2, got %q", entry.record.Slug)
+	}
+}
+
 func TestSessionsUI_CtrlBReversesSelectedSessionStep(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
@@ -789,6 +1139,29 @@ func TestSessionsUI_CreateDelegateNoHorizontalShift(t *testing.T) {
 	}
 }
 
+func TestSessionsUI_CreateDelegateSelectedTitleKeepsDefaultPinkForeground(t *testing.T) {
+	d := newCreateListDelegate()
+	selectedFG := fmt.Sprint(d.Styles.SelectedTitle.GetForeground())
+	if selectedFG != "{238 111 248 255}" {
+		t.Fatalf("expected selected-title foreground to stay default pink, got %q", selectedFG)
+	}
+}
+
+func TestCreateListShouldUseSelectedStyle(t *testing.T) {
+	if createListShouldUseSelectedStyle(list.Filtering, "", true) {
+		t.Fatalf("expected empty filtering query to use dimmed style, not selected")
+	}
+	if !createListShouldUseSelectedStyle(list.Filtering, "a", true) {
+		t.Fatalf("expected non-empty filtering query to keep selected style")
+	}
+	if !createListShouldUseSelectedStyle(list.FilterApplied, "a", true) {
+		t.Fatalf("expected applied filter state to keep selected style")
+	}
+	if createListShouldUseSelectedStyle(list.Filtering, "a", false) {
+		t.Fatalf("did not expect unselected rows to use selected style")
+	}
+}
+
 func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
 	selected := map[string]bool{}
@@ -833,31 +1206,206 @@ func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 	}
 }
 
-func TestSessionsUI_ViewShowsPublishHintWhenEligible(t *testing.T) {
+func TestSessionsUI_CreateModeTypingStartsFuzzyAutocompleteBySubjectName(t *testing.T) {
 	m := sessionsSwitchboardModel{
-		view:               sessionsViewBrowse,
-		filter:             newSessionsFilterInput(),
-		table:              table.New(),
-		finishedSessionCount:   2,
-		inProgressSessionCount: 0,
+		subjects: []store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+		},
+		selectedBySubject: map[string]bool{},
 	}
-	out := stripANSI(m.View().Content)
-	if !strings.Contains(out, "p publish with 2 sessions") {
-		t.Fatalf("expected publish hint in browse footer, got:\n%s", out)
+	m.refreshCreateList()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(sessionsSwitchboardModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	m = updated.(sessionsSwitchboardModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = updated.(sessionsSwitchboardModel)
+
+	if !m.list.SettingFilter() {
+		t.Fatalf("expected create-mode list to enter filtering state on typing")
+	}
+	if m.list.FilterValue() != "alp" {
+		t.Fatalf("expected create-mode filter query to be alp, got %q", m.list.FilterValue())
+	}
+	items := m.list.Items()
+	if len(items) < 2 {
+		t.Fatalf("expected at least two subject items, got %d", len(items))
+	}
+	if items[0].FilterValue() != "Alpha Subject" || items[1].FilterValue() != "Beta Subject" {
+		t.Fatalf("expected subject-name filter values, got %q and %q", items[0].FilterValue(), items[1].FilterValue())
 	}
 }
 
-func TestSessionsUI_ViewHidesPublishHintWhenIneligible(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:               sessionsViewBrowse,
-		filter:             newSessionsFilterInput(),
-		table:              table.New(),
-		finishedSessionCount:   2,
-		inProgressSessionCount: 1,
+func TestSessionCreatePicker_TypingStartsFuzzyAutocompleteBySubjectName(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+		},
+		map[string]bool{},
+	)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(sessionCreatePickerModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	m = updated.(sessionCreatePickerModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	m = updated.(sessionCreatePickerModel)
+
+	if !m.list.SettingFilter() {
+		t.Fatalf("expected shared create picker list to enter filtering state on typing")
 	}
+	if m.list.FilterValue() != "alp" {
+		t.Fatalf("expected picker filter query to be alp, got %q", m.list.FilterValue())
+	}
+	items := m.list.Items()
+	if len(items) < 2 {
+		t.Fatalf("expected at least two subject items, got %d", len(items))
+	}
+	if items[0].FilterValue() != "Alpha Subject" || items[1].FilterValue() != "Beta Subject" {
+		t.Fatalf("expected subject-name filter values, got %q and %q", items[0].FilterValue(), items[1].FilterValue())
+	}
+}
+
+func TestSessionCreatePicker_ShiftEnterActsAsCreateShortcut(t *testing.T) {
+	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
+	m := newSessionCreatePickerModel(subjects, map[string]bool{"abc12345-0000-0000-0000-000000000000": true})
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = updated.(sessionCreatePickerModel)
+
+	if !m.done {
+		t.Fatalf("expected shift+enter to complete picker as create shortcut")
+	}
+	if m.canceled {
+		t.Fatalf("did not expect shift+enter to cancel picker")
+	}
+	if m.requestCreateSubject {
+		t.Fatalf("did not expect shift+enter to trigger create-subject flow")
+	}
+}
+
+func TestSessionsUI_CreateModeShiftEnterWithoutSelectionShowsCreateMessage(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewCreate,
+		root:              t.TempDir(),
+		subjects:          []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}},
+		selectedBySubject: map[string]bool{},
+	}
+	m.refreshCreateList()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = updated.(sessionsSwitchboardModel)
+
+	if m.message != "select at least one subject before Create" {
+		t.Fatalf("expected create validation message on shift+enter, got %q", m.message)
+	}
+}
+
+func TestSessionsUI_CreateViewShowsFilterInputBeforeTyping(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		subjects:          []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}},
+		selectedBySubject: map[string]bool{},
+	}
+	m.refreshCreateList()
+
 	out := stripANSI(m.View().Content)
-	if strings.Contains(out, "p publish with") {
-		t.Fatalf("did not expect publish hint in browse footer, got:\n%s", out)
+	if !strings.Contains(out, "Filter:") {
+		t.Fatalf("expected create-mode view to show filter input before typing, got:\n%s", out)
+	}
+}
+
+func TestSessionCreatePicker_ViewShowsFilterInputBeforeTyping(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}},
+		map[string]bool{},
+	)
+
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "Filter:") {
+		t.Fatalf("expected shared picker view to show filter input before typing, got:\n%s", out)
+	}
+}
+
+func TestSessionCreatePicker_ClearingFilterDoesNotDuplicateFilterLineAndKeepsRowsSelectable(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+		},
+		map[string]bool{},
+	)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m = updated.(sessionCreatePickerModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = updated.(sessionCreatePickerModel)
+
+	if m.list.FilterValue() != "" {
+		t.Fatalf("expected cleared filter value, got %q", m.list.FilterValue())
+	}
+	if got := strings.Count(stripANSI(m.View().Content), "Filter:"); got != 1 {
+		t.Fatalf("expected exactly one Filter line after clear, got %d", got)
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(sessionCreatePickerModel)
+	if len(m.SelectedSubjects()) != 1 {
+		t.Fatalf("expected enter to toggle currently selected subject after clear")
+	}
+}
+
+func TestSessionCreatePicker_FilteringAutoSelectsTopEntry(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+			{UUID: "ghi11111-0000-0000-0000-000000000000", Name: "Gamma Subject"},
+		},
+		map[string]bool{},
+	)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(sessionCreatePickerModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(sessionCreatePickerModel)
+	if m.list.Index() == 0 {
+		t.Fatalf("expected pre-filter selection to move away from top")
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(sessionCreatePickerModel)
+	if m.list.Index() != 0 {
+		t.Fatalf("expected filtering to auto-select top entry, got index=%d", m.list.Index())
+	}
+}
+
+func TestSessionsUI_CreateModeFilteringAutoSelectsTopEntry(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view: sessionsViewCreate,
+		subjects: []store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+			{UUID: "ghi11111-0000-0000-0000-000000000000", Name: "Gamma Subject"},
+		},
+		selectedBySubject: map[string]bool{},
+	}
+	m.refreshCreateList()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(sessionsSwitchboardModel)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(sessionsSwitchboardModel)
+	if m.list.Index() == 0 {
+		t.Fatalf("expected pre-filter selection to move away from top")
+	}
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(sessionsSwitchboardModel)
+	if m.list.Index() != 0 {
+		t.Fatalf("expected filtering to auto-select top entry, got index=%d", m.list.Index())
 	}
 }
 
@@ -898,19 +1446,24 @@ func stripInternalMarkers(s string) string {
 	return strings.NewReplacer("\x1e", "", "\x1f", "").Replace(s)
 }
 
+func countBackgroundANSI(s string) int {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*48;`)
+	return len(re.FindAllString(s, -1))
+}
+
 func assertSingleFocusedActionCell(t *testing.T, activeCell, stepCell, nextCell string) {
 	t.Helper()
 	activePlain := stripANSI(activeCell)
 	stepPlain := stripANSI(stepCell)
 	nextPlain := stripANSI(nextCell)
 	focused := 0
-	if strings.Contains(activePlain, "{") && strings.Contains(activePlain, "}") {
+	if strings.Contains(activePlain, focusedActionMarker) {
 		focused++
 	}
-	if strings.Contains(stepPlain, "{") || strings.Contains(stepPlain, "}") {
+	if strings.Contains(stepPlain, focusedActionMarker) {
 		focused++
 	}
-	if strings.Contains(nextPlain, "{") && strings.Contains(nextPlain, "}") {
+	if strings.Contains(nextPlain, focusedActionMarker) {
 		focused++
 	}
 	if focused != 1 {
