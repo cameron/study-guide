@@ -94,6 +94,4 @@ product truth.
 
 # Acknowledgements
 
-Thanks to Charm for the lovely TUI toolkit.
-
-- https://charm.land/
+Thanks to [Charm](https://charm.land/) for the lovely TUI toolkit.
