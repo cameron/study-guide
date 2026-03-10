@@ -96,6 +96,4 @@ product truth.
 
 Thanks to Charm for the lovely TUI toolkit.
 
-- https://charm.land/bubbletea/v2
-- https://charm.land/bubbles/v2
-- https://github.com/charmbracelet/glow
+- https://charm.land/
