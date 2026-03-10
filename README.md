@@ -3,7 +3,7 @@
 _A CLI tool for collecting and organizing data from sources that are blind to your
 research protocol (like your photo library)._
 
-## Motivation: Mutlisubject Live Blood Analysis Studies
+## Motivation: Multisubject Live Blood Analysis Studies
 _But the solution generalizes._
 
 I've been doing some live blood analysis, and when juggling multiple subjects (people) in
