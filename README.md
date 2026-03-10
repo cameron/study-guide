@@ -35,10 +35,11 @@ publish a paper.
 
 ## Interactive DWIM by Default
 
-The naked command is designed to be interatively feature-complete; that is, all you ever have to
-do is get into your (potentially empty) study directory and run `sg`, it will DWIM ("Do
-what [you] mean"): initialize the study files, help you outline the protocol, create and
-manage sessions, publish a PDF and HTML page&mdash;all driven by the state of the file system.
+The naked command is designed to be interactively feature-complete; that is, all you ever have to
+do is get into your (potentially empty) study directory, run `sg`, and it will DWIM ("Do
+what [you] mean"): initialize the study, protocol, and session files and folders, help you
+outline the protocol, create, manage, and focus sessions, publish a PDF and HTML page&mdash;all
+driven by the state of the file system.
 
 ## Non-interactive Mode
 
