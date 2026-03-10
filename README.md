@@ -15,6 +15,7 @@ Ideally, the researcher should only have to:
 2. during the study, create a sessions (a protocol and a subject, e.g., a person)
 3. advance each session through its steps (CLI will record timestamps)
 4. indicate which session is currently being captured by the phone or external data source
+   (CLI records more timestamps)
 5. profit
 
 Having recorded the timestamps of each session's steps and focus windows, the program can
@@ -32,10 +33,19 @@ study a name, defined a protocol, and collected some data, you're a couple of pa
 of prose (abstract, discussion, conclusion) away from having everything you need to
 publish a paper.
 
+## Interactive DWIM by Default
+
 The naked command is designed to be interatively feature-complete; that is, all you ever have to
 do is get into your (potentially empty) study directory and run `sg`, it will DWIM ("Do
 what [you] mean"): initialize the study files, help you outline the protocol, create and
-manage sessions.
+manage sessions, publish a PDF and HTML page&mdash;all driven by the state of the file system.
+
+## Non-interactive Mode
+
+`sg` also aims to provide all features non-interatively, that is, as one-off subcommands
+of the CLI.
+
+Run `sg -h` to see a list of available commands.
 
 ## Persistence: Markdown Files
 
@@ -69,7 +79,7 @@ global store outside the study tree:
 # Status: Alpha
 
 While you can probably clone, build, and use the tool if you have a working Go
-installation, I haven't put much effort into making the process smooth, or documenting
+installation, I haven't yet put much effort into making the process smooth, or documenting
 much.
 
 Feel free to open an issue if you'd like to use it and are having trouble.
