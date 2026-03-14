@@ -175,6 +175,7 @@ Required for final protocol step at session completion:
 Optional for non-final protocol steps:
 - `time_finished`
   - if omitted, implied value is `next_step.time_started - 1 second`
+  - if explicitly present, that explicit value remains authoritative for timing/ownership validation, including when it is equal to the next step's `time_started`
 
 Optional frontmatter:
 - `focus_windows` (array of `{time_started, time_finished}` pairs)
@@ -328,7 +329,7 @@ Behavior:
 31. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
 32. `p` triggers publish from browse view (keyboard action; not a table row).
 33. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
-34. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must render the subject form in an isolated screen and clear on return, so stale rows from the picker/session list never leak into the form (or vice versa).
+34. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then return to the picker without stale rows leaking between the two screens.
 35. In the shared create-session picker (used by both `sg session` and `sg sessions`), typing immediately starts fuzzy autocomplete filtering over subject names (without requiring `/`).
 36. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for `-> Create Session`.
 37. In create mode of that same shared picker, the subject filter/search input is always visible before typing.

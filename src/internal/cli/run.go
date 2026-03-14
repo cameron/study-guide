@@ -267,12 +267,11 @@ func subjectCreate() error {
 }
 
 func subjectCreateWithStudyRoot(studyRoot string) error {
-	req, err := subjectCreateRequirements(studyRoot)
+	form, err := newSubjectCreateFormModel(studyRoot)
 	if err != nil {
 		return err
 	}
-	fields := subjectCreateFormFieldsFromRequirements(req)
-	vals, canceled, err := runForm("Create Subject", fields)
+	vals, canceled, err := runForm(form.title, form.fields)
 	if err != nil {
 		return err
 	}
@@ -280,32 +279,7 @@ func subjectCreateWithStudyRoot(studyRoot string) error {
 		fmt.Println("canceled")
 		return nil
 	}
-	extra := map[string]string{}
-	for k, v := range vals {
-		switch k {
-		case "name", "type", "email", "phone", "age", "sex", "notes":
-			continue
-		default:
-			if strings.TrimSpace(v) != "" {
-				extra[k] = strings.TrimSpace(v)
-			}
-		}
-	}
-	subjectType := strings.TrimSpace(vals["type"])
-	if subjectType == "" {
-		subjectType = "person"
-	}
-	s := store.Subject{
-		Name:  vals["name"],
-		Type:  subjectType,
-		Email: vals["email"],
-		Phone: vals["phone"],
-		Age:   vals["age"],
-		Sex:   vals["sex"],
-		Notes: vals["notes"],
-		Extra: extra,
-	}
-	path, err := store.SaveSubject(s)
+	path, err := saveCreatedSubject(vals)
 	if err != nil {
 		return err
 	}
@@ -2735,8 +2709,12 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 	}
 	for i := 0; i < last; i++ {
 		nextStart := starts[i+1]
-		if !hasExplicitFinish[i] || !finishes[i].Before(nextStart) {
+		if !hasExplicitFinish[i] {
 			finishes[i] = nextStart.Add(-1 * time.Second)
+			continue
+		}
+		if finishes[i].After(nextStart) {
+			return nil, fmt.Errorf("step time_finished exceeds next step start for step %s", protocol.Steps[i].Slug)
 		}
 	}
 

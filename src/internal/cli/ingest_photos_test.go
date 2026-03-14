@@ -119,6 +119,39 @@ func TestLoadStepWindows_UsesFocusWindowsForOwnership(t *testing.T) {
 	}
 }
 
+func TestLoadStepWindows_HonorsExplicitNonFinalFinishAtNextStepBoundary(t *testing.T) {
+	tmp := t.TempDir()
+	sessionDir := filepath.Join(tmp, "session", "s1")
+	protocol := store.Protocol{Steps: []store.ProtocolStep{
+		{Name: "A", Slug: "a"},
+		{Name: "B", Slug: "b"},
+	}}
+
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:05:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:00:00 01-01-2026", "time_finished": "10:05:00 01-01-2026"},
+		},
+	}, "# A\n")
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "b", "step.sg.md"), map[string]any{
+		"time_started":  "10:05:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:05:00 01-01-2026", "time_finished": "10:10:00 01-01-2026"},
+		},
+	}, "# B\n")
+
+	windows, err := loadStepWindows(sessionDir, protocol)
+	if err != nil {
+		t.Fatalf("loadStepWindows returned error: %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected 2 ownership windows, got %d", len(windows))
+	}
+	assertTimeEqual(t, windows[0].End, "10:05:00 01-01-2026")
+}
+
 func TestLoadStepWindows_RequiresFocusWindows(t *testing.T) {
 	tmp := t.TempDir()
 	sessionDir := filepath.Join(tmp, "session", "s1")
@@ -441,6 +474,11 @@ func TestCmdIngestPhotos_FourConcurrentlyFixture_UsesEmbeddedSubjectStepMetadata
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
 	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "four-concurrently"), studyRoot)
+	for _, slug := range []string{"13-03-2026-boehmer", "13-03-2026-marco", "14-03-2026-test"} {
+		if err := os.RemoveAll(filepath.Join(studyRoot, "session", slug)); err != nil {
+			t.Fatalf("RemoveAll fixture session %s error: %v", slug, err)
+		}
+	}
 	mustWidenPointFocusWindows(t, studyRoot, time.Second)
 
 	preCount := countIngestedAssetsInStudy(t, studyRoot)
@@ -1052,11 +1090,16 @@ func mustPopulateFocusWindowsFromStepTimes(t *testing.T, studyRoot string) {
 		starts := make([]time.Time, len(protocol.Steps))
 		finishes := make([]time.Time, len(protocol.Steps))
 		stepFiles := make([]string, len(protocol.Steps))
+		skipSession := false
 		for i, st := range protocol.Steps {
 			stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
 			stepFiles[i] = stepPath
 			fm, _, err := util.ReadFrontmatterFile(stepPath)
 			if err != nil {
+				if os.IsNotExist(err) {
+					skipSession = true
+					break
+				}
 				t.Fatalf("ReadFrontmatterFile %s error: %v", stepPath, err)
 			}
 			started := strings.TrimSpace(asString(fm["time_started"]))
@@ -1076,6 +1119,9 @@ func mustPopulateFocusWindowsFromStepTimes(t *testing.T, studyRoot string) {
 				}
 				finishes[i] = finishTS
 			}
+		}
+		if skipSession {
+			continue
 		}
 		last := len(protocol.Steps) - 1
 		if finishes[last].IsZero() {
@@ -1128,6 +1174,13 @@ func mustWidenPointFocusWindows(t *testing.T, studyRoot string, by time.Duration
 		if err != nil {
 			return err
 		}
+		stepFinishRaw := strings.TrimSpace(asString(fm["time_finished"]))
+		stepFinish := time.Time{}
+		if stepFinishRaw != "" {
+			if parsed, err := util.ParseTimestamp(stepFinishRaw); err == nil {
+				stepFinish = parsed
+			}
+		}
 		rawWindows, ok := fm["focus_windows"]
 		if !ok {
 			return nil
@@ -1156,8 +1209,14 @@ func mustWidenPointFocusWindows(t *testing.T, studyRoot string, by time.Duration
 				continue
 			}
 			if startTS.Equal(endTS) {
-				entry["time_finished"] = startTS.Add(by).Format(util.TimestampLayout)
-				changed = true
+				widenedEnd := startTS.Add(by)
+				if !stepFinish.IsZero() && widenedEnd.After(stepFinish) {
+					widenedEnd = stepFinish
+				}
+				if !widenedEnd.Equal(endTS) {
+					entry["time_finished"] = widenedEnd.Format(util.TimestampLayout)
+					changed = true
+				}
 			}
 			list[i] = entry
 		}

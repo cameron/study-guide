@@ -34,45 +34,14 @@ func newSessionCreatePickerModel(subjects []store.Subject, selectedBySubject map
 		m.selectedBySubject[k] = v
 	}
 
-	delegate := newCreateListDelegate()
-	m.list = list.New([]list.Item{}, delegate, 100, 18)
-	m.list.Title = "Create Session"
-	m.list.SetShowTitle(false)
-	m.list.SetShowFilter(false)
-	m.list.SetShowHelp(false)
-	m.list.SetShowStatusBar(false)
-	m.list.SetShowPagination(false)
-	m.list.FilterInput.Prompt = "Filter: "
-	m.list.FilterInput.Placeholder = sessionsCreateFilterPlaceholder
-	m.list.FilterInput.CharLimit = 120
-	m.list.FilterInput.Focus()
-	applyFilterInputAccentStyle(&m.list.FilterInput)
+	m.list = newCreateSessionListModel(nil)
 	m.refreshList()
 	return m
 }
 
 func (m *sessionCreatePickerModel) refreshList() {
-	items := make([]list.Item, 0, len(m.subjects)+1)
-	m.createLookup = map[string]string{}
-	if len(m.subjects) == 0 {
-		items = append(items, listItem(sessionsCreateItemLabel("No subjects available")))
-	} else {
-		for _, s := range m.subjects {
-			marker := "[ ]"
-			if m.selectedBySubject[s.UUID] {
-				marker = "[x]"
-			}
-			label := sessionsCreateItemLabel(fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0]))
-			items = append(items, labeledListItem{title: label, filter: s.Name})
-			m.createLookup[label] = "subject:" + s.UUID
-		}
-	}
-	createSubjectLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSubject)
-	items = append(items, listItem(createSubjectLabel))
-	m.createLookup[createSubjectLabel] = "create-subject"
-	createLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSession)
-	items = append(items, listItem(createLabel))
-	m.createLookup[createLabel] = "create"
+	items, createLookup := buildCreateSessionItems(m.subjects, m.selectedBySubject)
+	m.createLookup = createLookup
 	m.list.SetItems(items)
 }
 

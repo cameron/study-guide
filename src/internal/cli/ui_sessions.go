@@ -26,6 +26,7 @@ type sessionsView int
 const (
 	sessionsViewBrowse sessionsView = iota
 	sessionsViewCreate
+	sessionsViewCreateSubject
 )
 
 type browseEntryKind int
@@ -60,6 +61,7 @@ type sessionsSwitchboardModel struct {
 	inProgressSessionCount int
 	subjects               []store.Subject
 	selectedBySubject      map[string]bool
+	createSubjectForm      formModel
 	publishFunc            func(string) error
 
 	message string
@@ -255,10 +257,7 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 	tbl.SetStyles(tblStyles)
 	fi := newSessionsFilterInput()
 
-	createList := list.New([]list.Item{}, list.NewDefaultDelegate(), 100, 18)
-	createList.SetShowHelp(false)
-	createList.SetShowPagination(false)
-	createList.SetShowStatusBar(false)
+	createList := newCreateSessionListModel(nil)
 
 	m := sessionsSwitchboardModel{
 		root:              root,
@@ -288,6 +287,9 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(max(msg.Width-2, 60), max(msg.Height-8, 8))
 		m.filter.SetWidth(max(msg.Width-18, 20))
 	case tea.KeyPressMsg:
+		if m.view == sessionsViewCreateSubject {
+			return m.updateCreateSubjectForm(msg)
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -370,6 +372,10 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.view == sessionsViewCreateSubject {
+		return m.updateCreateSubjectForm(msg)
+	}
+
 	if m.view == sessionsViewBrowse {
 		oldCursor := m.table.Cursor()
 		oldFilter := m.filter.Value()
@@ -398,6 +404,9 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m sessionsSwitchboardModel) View() tea.View {
+	if m.view == sessionsViewCreateSubject {
+		return m.createSubjectForm.View()
+	}
 	if m.view == sessionsViewCreate {
 		var b strings.Builder
 		b.WriteString(renderScreenTitle("Create Session"))
@@ -528,19 +537,15 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 	case "create":
 		return m.handleCreateShortcut()
 	case "create-subject":
-		if err := subjectCreateWithStudyRoot(m.root); err != nil {
+		form, err := newSubjectCreateFormModel(m.root)
+		if err != nil {
 			m.message = "create subject failed: " + err.Error()
 			return m, nil
 		}
-		subs, err := store.ListSubjects()
-		if err != nil {
-			m.message = "refresh subjects failed: " + err.Error()
-			return m, nil
-		}
-		m.subjects = subs
-		m.refreshCreateList()
+		m.createSubjectForm = form
 		m.message = ""
-		return m, nil
+		m.view = sessionsViewCreateSubject
+		return m, textinput.Blink
 	case "":
 		return m, nil
 	default:
@@ -824,42 +829,39 @@ func (m sessionsSwitchboardModel) selectedBrowseEntry() (browseEntry, bool) {
 }
 
 func (m *sessionsSwitchboardModel) refreshCreateList() {
-	items := make([]list.Item, 0, len(m.subjects)+1)
-	m.createLookup = map[string]string{}
-	if len(m.subjects) == 0 {
-		items = append(items, listItem(sessionsCreateItemLabel("No subjects available")))
-	} else {
-		for _, s := range m.subjects {
-			marker := "[ ]"
-			if m.selectedBySubject[s.UUID] {
-				marker = "[x]"
-			}
-			label := sessionsCreateItemLabel(fmt.Sprintf("%s %s (%s)", marker, s.Name, strings.Split(s.UUID, "-")[0]))
-			items = append(items, labeledListItem{title: label, filter: s.Name})
-			m.createLookup[label] = "subject:" + s.UUID
-		}
-	}
-	createSubjectLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSubject)
-	items = append(items, listItem(createSubjectLabel))
-	m.createLookup[createSubjectLabel] = "create-subject"
-	createLabel := sessionsCreateItemLabel(sessionsCreateActionCreateSession)
-	items = append(items, listItem(createLabel))
-	m.createLookup[createLabel] = "create"
-
-	delegate := newCreateListDelegate()
-	m.list = list.New(items, delegate, 100, 18)
-	m.list.Title = "Create Session"
-	m.list.SetShowTitle(false)
-	m.list.SetShowFilter(false)
-	m.list.SetShowHelp(false)
-	m.list.SetShowStatusBar(false)
-	m.list.SetShowPagination(false)
-	m.list.FilterInput.Prompt = "Filter: "
-	m.list.FilterInput.Placeholder = sessionsCreateFilterPlaceholder
-	m.list.FilterInput.CharLimit = 120
-	m.list.FilterInput.Focus()
-	applyFilterInputAccentStyle(&m.list.FilterInput)
+	items, createLookup := buildCreateSessionItems(m.subjects, m.selectedBySubject)
+	m.createLookup = createLookup
+	m.list = newCreateSessionListModel(items)
 	m.view = sessionsViewCreate
+}
+
+func (m sessionsSwitchboardModel) updateCreateSubjectForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, _ := m.createSubjectForm.Update(msg)
+	m.createSubjectForm = next.(formModel)
+	if !m.createSubjectForm.done {
+		return m, nil
+	}
+	if m.createSubjectForm.canceled {
+		m.refreshCreateList()
+		m.message = ""
+		return m, nil
+	}
+	path, err := saveCreatedSubject(formValues(m.createSubjectForm))
+	if err != nil {
+		m.refreshCreateList()
+		m.message = "create subject failed: " + err.Error()
+		return m, nil
+	}
+	subs, err := store.ListSubjects()
+	if err != nil {
+		m.refreshCreateList()
+		m.message = "refresh subjects failed: " + err.Error()
+		return m, nil
+	}
+	m.subjects = subs
+	m.refreshCreateList()
+	m.message = "created " + path
+	return m, nil
 }
 
 func (m *sessionsSwitchboardModel) selectedSubjects() []store.Subject {
