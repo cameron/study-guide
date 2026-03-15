@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 
 	"study-guide/src/internal/store"
@@ -35,7 +36,11 @@ func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t
 		t.Fatalf("mkdir session failed: %v", err)
 	}
 
-	alphaPath, err := store.SaveSubject(store.Subject{Name: "Alpha Subject", Type: "person"})
+	alphaPath, err := store.SaveSubject(store.Subject{
+		Name:      "Alpha Subject",
+		Type:      "person",
+		CreatedOn: "11:59:59 14-03-2026",
+	})
 	if err != nil {
 		t.Fatalf("seed subject failed: %v", err)
 	}
@@ -123,6 +128,9 @@ func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t
 	if len(items) != 4 {
 		t.Fatalf("expected Alpha, Beta, New subject, and Create entries after refresh, got %d", len(items))
 	}
+	if got := listItemTitles(items[:2]); got != "  Beta Subject ("+shortSubjectID(allSubjects[1].UUID)+"),  Alpha Subject ("+shortSubjectID(allSubjects[0].UUID)+")" {
+		t.Fatalf("expected most-recent-first picker order after create, got %q", got)
+	}
 }
 
 func selectedSubjectNames(subjects []store.Subject) string {
@@ -131,4 +139,17 @@ func selectedSubjectNames(subjects []store.Subject) string {
 		names = append(names, s.Name)
 	}
 	return strings.Join(names, ",")
+}
+
+func listItemTitles(items []list.Item) string {
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		title, ok := selectedListItemTitle(item)
+		if !ok {
+			titles = append(titles, "")
+			continue
+		}
+		titles = append(titles, title)
+	}
+	return strings.Join(titles, ",")
 }

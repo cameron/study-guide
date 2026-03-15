@@ -4,3 +4,5 @@
   - support multiple formats
     - # Steps / ## step / description
     - # Steps / - step: description / ...
+- web ui instead of CLI?
+  - could show subject photos to make sessions easier to differentiate

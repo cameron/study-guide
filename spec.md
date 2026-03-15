@@ -308,7 +308,7 @@ Behavior:
    This pink selected styling applies to the sessions browse table and create-mode subject list.
 17. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `FOCUSED=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).
 18. Browse layout order is:
-- `Sessions` title
+- `Sessions` title line with inline key legend rendered on the same line in the format `[key] description // [key] description // ...`
 - filter input (` filter: ` prompt)
 - open-sessions table (headers + body)
    Filter inputs (browse + shared create picker) use a distinct accent style:
@@ -318,10 +318,10 @@ Behavior:
 21. Filter placeholder text is exactly `by subject or slug`.
 22. Browse table does not include `Create new session` or `Exit` rows.
    When there are no incomplete sessions, the table shows a single empty-state row: `no open sessions`.
-23. Browse footer key hint is: `enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit`.
+23. Browse title-line key hint is: `[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit`.
 24. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
-25. Create mode header text is exactly `Create Session`; instructional copy (`select one or more subjects, then choose Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-26. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above `-> Create Session`.
+25. Create mode header text is exactly `Create Session`; instructional copy (`select a subject, then confirm Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+26. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above the create-confirmation row.
 27. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
 28. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
 29. Create-mode list item labels are uniformly indented with exactly two leading spaces.
@@ -331,11 +331,13 @@ Behavior:
 33. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
 34. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then return to the picker without stale rows leaking between the two screens.
 35. In the shared create-session picker (used by both `sg session` and `sg sessions`), typing immediately starts fuzzy autocomplete filtering over subject names (without requiring `/`).
-36. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for `-> Create Session`.
+36. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for the current create-confirmation row.
 37. In create mode of that same shared picker, the subject filter/search input is always visible before typing.
 38. In create mode of that same shared picker, clearing the subject filter query (for example backspacing from one character to empty) must not duplicate the `Filter:` line, and subject rows remain selectable.
 39. In create mode of that same shared picker, when the subject filter query changes, the filtered results must auto-select the top visible entry.
 40. Create-mode selected subject row styling uses Bubble's default pink selected color, and this selected styling must apply to the auto-selected top entry while filtering.
+41. In create mode of the shared create-session picker, pressing `enter` on a subject chooses exactly that subject, rewrites the create-confirmation row label to `-> Create Session with <subject>`, and moves selection to that row instead of building a multi-subject selection list.
+42. In `sg sessions` create mode and the shared `sg session` picker, subject rows are ordered by most recently created first, so a subject created from `(+) New subject` returns at the top of the picker.
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
@@ -538,6 +540,7 @@ All criteria below are pass/fail requirements for v1.
 24. In `sg sessions` create mode and the shared `sg session` picker, clearing the subject filter query preserves single-line filter rendering and keeps subject rows selectable.
 25. In `sg sessions` create mode and the shared `sg session` picker, typing/changing a subject filter auto-selects the top filtered subject entry.
 26. In `sg sessions` browse mode, typing `l` in the filter input appends `l` to the query and does not move the action cursor.
+27. In `sg sessions` create mode and the shared `sg session` picker, subject rows are ordered by most recently created first, so a subject created from `(+) New subject` returns at the top of the picker.
 
 ### E. Photo Ingestion
 1. `sg data ingest` is non-interactive and runs against all sessions in the study.

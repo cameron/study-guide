@@ -70,7 +70,7 @@ func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "create":
 				if len(m.SelectedSubjects()) == 0 {
-					m.message = "select at least one subject before Create"
+					m.message = "select a subject before Create"
 					return m, nil
 				}
 				m.done = true
@@ -79,8 +79,9 @@ func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			default:
 				uid := strings.TrimPrefix(token, "subject:")
-				m.selectedBySubject[uid] = !m.selectedBySubject[uid]
+				m.selectSubject(uid)
 				m.refreshList()
+				m.list.Select(len(m.list.Items()) - 1)
 				m.message = ""
 				return m, nil
 			}
@@ -112,11 +113,18 @@ func (m sessionCreatePickerModel) View() tea.View {
 
 func (m sessionCreatePickerModel) handleCreateShortcut() (tea.Model, tea.Cmd) {
 	if len(m.SelectedSubjects()) == 0 {
-		m.message = "select at least one subject before Create"
+		m.message = "select a subject before Create"
 		return m, nil
 	}
 	m.done = true
 	return m, tea.Quit
+}
+
+func (m *sessionCreatePickerModel) selectSubject(uid string) {
+	for k := range m.selectedBySubject {
+		delete(m.selectedBySubject, k)
+	}
+	m.selectedBySubject[uid] = true
 }
 
 func (m sessionCreatePickerModel) SelectedSubjects() []store.Subject {

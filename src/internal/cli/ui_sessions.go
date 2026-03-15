@@ -79,9 +79,10 @@ var selectedRowTintDark = color.RGBA{R: 0x26, G: 0x2b, B: 0x3a, A: 0xff}
 const selectedRowBackgroundANSILight = "\x1b[48;2;217;220;239m"
 const selectedRowBackgroundANSIDark = "\x1b[48;2;38;43;58m"
 
-const sessionsCreateInfoText = "select one or more subjects, then choose Create; esc to cancel"
+const sessionsCreateInfoText = "select a subject, then confirm Create; esc to cancel"
 const sessionsBrowseFilterPlaceholder = "by subject or slug"
 const sessionsCreateFilterPlaceholder = "by subject name"
+const sessionsBrowseTitleKeyHint = "[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit"
 const sessionsCreateItemIndent = "  "
 const sessionsCreateActionCreateSubject = "(+) New subject"
 const sessionsCreateActionCreateSession = "-> Create Session"
@@ -423,13 +424,11 @@ func (m sessionsSwitchboardModel) View() tea.View {
 	}
 
 	var b strings.Builder
-	b.WriteString(renderScreenTitle("Sessions"))
+	b.WriteString(renderScreenTitle("Sessions " + sessionsBrowseTitleKeyHint))
 	b.WriteString("\n")
 	b.WriteString(m.filter.View())
 	b.WriteString("\n")
 	b.WriteString(m.table.View())
-	b.WriteString("\n")
-	b.WriteString(subtleTextStyle.Render("enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit"))
 	return tea.NewView(b.String())
 }
 
@@ -549,8 +548,9 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	default:
 		uid := strings.TrimPrefix(token, "subject:")
-		m.selectedBySubject[uid] = !m.selectedBySubject[uid]
+		m.selectCreateSubject(uid)
 		m.refreshCreateList()
+		m.list.Select(len(m.list.Items()) - 1)
 		m.message = ""
 		return m, nil
 	}
@@ -559,7 +559,7 @@ func (m sessionsSwitchboardModel) handleCreateEnter() (tea.Model, tea.Cmd) {
 func (m sessionsSwitchboardModel) handleCreateShortcut() (tea.Model, tea.Cmd) {
 	selected := m.selectedSubjects()
 	if len(selected) == 0 {
-		m.message = "select at least one subject before Create"
+		m.message = "select a subject before Create"
 		return m, nil
 	}
 	slug, _, err := createSessionScaffold(m.root, selected)
@@ -869,6 +869,13 @@ func (m *sessionsSwitchboardModel) selectedSubjects() []store.Subject {
 		}
 	}
 	return out
+}
+
+func (m *sessionsSwitchboardModel) selectCreateSubject(uid string) {
+	for k := range m.selectedBySubject {
+		delete(m.selectedBySubject, k)
+	}
+	m.selectedBySubject[uid] = true
 }
 
 func (m *sessionsSwitchboardModel) moveActionCursorRight() {

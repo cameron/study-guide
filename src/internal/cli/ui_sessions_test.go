@@ -560,11 +560,15 @@ func TestSessionsUI_View_LayoutOmitsStatusLinesButShowsKeyHints(t *testing.T) {
 	if !strings.Contains(out, "Sessions") {
 		t.Fatalf("expected Sessions title in output:\n%s", out)
 	}
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(firstLine, "[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit") {
+		t.Fatalf("expected browse key hint on title line, got:\n%s", out)
+	}
 	if !strings.Contains(out, " filter: ") {
 		t.Fatalf("expected filter input in output:\n%s", out)
 	}
-	if !strings.Contains(out, "enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit") {
-		t.Fatalf("expected browse key hint footer in output:\n%s", out)
+	if strings.Contains(out, "enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit") {
+		t.Fatalf("did not expect legacy browse key hint footer in output:\n%s", out)
 	}
 	for _, hidden := range []string{
 		"focused session:",
@@ -1007,7 +1011,7 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 	expectedInOrder := []string{
 		"Create Session",
 		"  " + sessionsCreateInfoText,
-		"  [ ] Alpha Subject (abc12345)",
+		"  Alpha Subject (abc12345)",
 		"  (+) New subject",
 		"  -> Create Session",
 	}
@@ -1029,7 +1033,7 @@ func TestSessionsUI_CreateViewSnapshot(t *testing.T) {
 	createLine := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "[ ] Alpha Subject (abc12345)" {
+		if trimmed == "Alpha Subject (abc12345)" {
 			subjectLine = i
 		}
 		if trimmed == "(+) New subject" && strings.HasPrefix(line, "  ") {
@@ -1104,7 +1108,7 @@ func TestSessionCreatePicker_ViewMatchesSessionsCreateView(t *testing.T) {
 	expectedInOrder := []string{
 		"Create Session",
 		"  " + sessionsCreateInfoText,
-		"  [ ] Alpha Subject (abc12345)",
+		"  Alpha Subject (abc12345)",
 		"  (+) New subject",
 		"  -> Create Session",
 	}
@@ -1224,7 +1228,7 @@ func TestSessionsUI_CreateModeShiftEnterWithoutSelectionShowsCreateMessage(t *te
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	m = updated.(sessionsSwitchboardModel)
 
-	if m.message != "select at least one subject before Create" {
+	if m.message != "select a subject before Create" {
 		t.Fatalf("expected create validation message on shift+enter, got %q", m.message)
 	}
 }
@@ -1278,7 +1282,62 @@ func TestSessionCreatePicker_ClearingFilterDoesNotDuplicateFilterLineAndKeepsRow
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(sessionCreatePickerModel)
 	if len(m.SelectedSubjects()) != 1 {
-		t.Fatalf("expected enter to toggle currently selected subject after clear")
+		t.Fatalf("expected enter to choose currently selected subject after clear")
+	}
+}
+
+func TestSessionsUI_CreateModeEnterOnSubjectMovesToSubjectSpecificCreatePrompt(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view: sessionsViewCreate,
+		subjects: []store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+		},
+		selectedBySubject: map[string]bool{},
+	}
+	m.refreshCreateList()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(sessionsSwitchboardModel)
+
+	selected := m.selectedSubjects()
+	if len(selected) != 1 || selected[0].Name != "Alpha Subject" {
+		t.Fatalf("expected only Alpha Subject selected, got %#v", selected)
+	}
+	if m.list.Index() != len(m.list.Items())-1 {
+		t.Fatalf("expected selection to move to create row, got index=%d", m.list.Index())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "-> Create Session with Alpha Subject") {
+		t.Fatalf("expected subject-specific create prompt, got:\n%s", out)
+	}
+	if strings.Contains(out, "-> Create Session with Beta Subject") {
+		t.Fatalf("did not expect non-selected subject in create prompt, got:\n%s", out)
+	}
+}
+
+func TestSessionCreatePicker_EnterOnSubjectMovesToSubjectSpecificCreatePrompt(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{
+			{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"},
+			{UUID: "def67890-0000-0000-0000-000000000000", Name: "Beta Subject"},
+		},
+		map[string]bool{},
+	)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(sessionCreatePickerModel)
+
+	selected := m.SelectedSubjects()
+	if len(selected) != 1 || selected[0].Name != "Alpha Subject" {
+		t.Fatalf("expected only Alpha Subject selected, got %#v", selected)
+	}
+	if m.list.Index() != len(m.list.Items())-1 {
+		t.Fatalf("expected selection to move to create row, got index=%d", m.list.Index())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "-> Create Session with Alpha Subject") {
+		t.Fatalf("expected subject-specific create prompt, got:\n%s", out)
 	}
 }
 
