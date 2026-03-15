@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,14 +20,13 @@ import (
 func testSessionsBrowseColumns() []table.Column {
 	return []table.Column{
 		{Title: "SUBJECT", Width: 20},
-		{Title: "FOCUSED", Width: 12},
-		{Title: "STEP", Width: 24},
-		{Title: "NEXT", Width: 16},
+		{Title: "CURRENT STEP", Width: 24},
+		{Title: "NEXT STEP", Width: 16},
 	}
 }
 
-func testSessionsBrowseRow(subject, focused, step, next string) table.Row {
-	return table.Row{subject, focused, step, next}
+func testSessionsBrowseRow(subject, current, next string) table.Row {
+	return table.Row{subject, current, next}
 }
 
 func TestSessionsUI_SelectedRowStyle_UsesDefaultPinkWithoutBackgroundTint(t *testing.T) {
@@ -37,135 +37,6 @@ func TestSessionsUI_SelectedRowStyle_UsesDefaultPinkWithoutBackgroundTint(t *tes
 	}
 	if _, ok := st.GetBackground().(lipgloss.NoColor); !ok {
 		t.Fatalf("expected selected row to avoid custom row background tint, got %T", st.GetBackground())
-	}
-}
-
-func TestSessionsUI_ActionCellStyling_DoesNotUseFullANSIReset(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				ProgressSteps: 1,
-				StepCount:     3,
-				CurrentStep:   "Ground",
-				NextStep:      "Second Exposure",
-			},
-		},
-	}
-	m.table.SetWidth(120)
-	m.applyBrowseEntries()
-	out := m.View().Content
-	if strings.Contains(out, "\x1b[0m") {
-		t.Fatalf("expected no full ANSI reset in rendered output, got %q", out)
-	}
-
-	bgCount := countBackgroundANSI(out)
-	if bgCount < 2 {
-		t.Fatalf("expected background styling in actionable cells, bg_count=%d output=%q", bgCount, out)
-	}
-}
-
-func TestSessionsUI_ActionCellStyling_UsesHarmonizedMintGreenPalette(t *testing.T) {
-	unfocused := renderActionCell("focus", false, false, 12)
-	focused := renderActionCell("↳ focus", true, true, 12)
-
-	unfocusedBG := regexp.MustCompile(`\x1b\[[0-9;]*48;2;(2;104;70|79;97;34)m`)
-	if !unfocusedBG.MatchString(unfocused) {
-		t.Fatalf("expected harmonized unfocused mint-green background, got %q", unfocused)
-	}
-	lightFG := regexp.MustCompile(`\x1b\[[0-9;]*38;5;255[0-9;]*m`)
-	if !lightFG.MatchString(unfocused) {
-		t.Fatalf("expected light foreground text in unfocused action cell, got %q", unfocused)
-	}
-
-	focusedBG := regexp.MustCompile(`\x1b\[[0-9;]*48;2;(4;181;117|147;173;63)m`)
-	if !focusedBG.MatchString(focused) {
-		t.Fatalf("expected harmonized focused mint-green background, got %q", focused)
-	}
-	if !lightFG.MatchString(focused) {
-		t.Fatalf("expected light foreground text in focused action cell, got %q", focused)
-	}
-}
-
-func TestSessionsUI_SelectedRowBackground_DoesNotApplyCustomTintAfterFocusedActionCell(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				ProgressSteps: 1,
-				StepCount:     3,
-				CurrentStep:   "Ground",
-				NextStep:      "Second Exposure",
-			},
-		},
-	}
-	m.table.SetWidth(120)
-	styles := table.DefaultStyles()
-	styles.Selected = sessionsSelectedRowStyle(styles.Selected)
-	m.table.SetStyles(styles)
-	m.applyBrowseEntries()
-	out := m.View().Content
-	idxFocus := strings.Index(out, focusedActionMarker+"focus")
-	idxStep := strings.Index(out, "[1/3] Ground")
-	if idxFocus < 0 || idxStep < 0 || idxStep <= idxFocus {
-		t.Fatalf("expected focused token before step text in output, got %q", stripANSI(out))
-	}
-	postFocus := out[idxFocus:]
-	if strings.Contains(postFocus, selectedRowBackgroundANSI()) {
-		t.Fatalf("did not expect custom selected-row background tint restoration after focused action cell, output=%q", out)
-	}
-}
-
-func TestSessionsUI_EmptyFocusedCell_RendersSpaceSoBackgroundIsVisible(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorNextStep,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				ProgressSteps: 1,
-				StepCount:     3,
-				CurrentStep:   "Ground",
-				NextStep:      "Second Exposure",
-				Active:        false,
-			},
-		},
-	}
-	m.table.SetWidth(120)
-	m.applyBrowseEntries()
-	rows := m.table.Rows()
-	if len(rows) != 1 {
-		t.Fatalf("expected one row, got %d", len(rows))
-	}
-	focusCell := rows[0][1]
-	plain := stripANSI(focusCell)
-	if plain != strings.Repeat(" ", 8) {
-		t.Fatalf("expected empty focus cell to be exactly 8 spaces, got %q", plain)
-	}
-	if countBackgroundANSI(focusCell) < 1 {
-		t.Fatalf("expected background style in empty focus cell, got %q", focusCell)
 	}
 }
 
@@ -230,22 +101,21 @@ func TestSessionsUI_BrowseLayoutWidths(t *testing.T) {
 	}
 	m.applyBrowseTableLayout()
 	cols := m.table.Columns()
-	if len(cols) != 4 {
-		t.Fatalf("expected 4 columns, got %d", len(cols))
+	if len(cols) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(cols))
 	}
-	if cols[0].Title != "SUBJECT" || cols[1].Title != "FOCUSED" || cols[2].Title != "STEP" || cols[3].Title != "NEXT" {
+	if cols[0].Title != "SUBJECT" || cols[1].Title != "CURRENT STEP" || cols[2].Title != "NEXT STEP" {
 		t.Fatalf("unexpected browse headers: %#v", cols)
 	}
-	if cols[0].Width != 35 || cols[1].Width != 24 || cols[2].Width != 48 {
+	if cols[0].Width != 35 || cols[1].Width != 48 {
 		t.Fatalf(
-			"unexpected fixed widths: subject=%d focused=%d step=%d",
+			"unexpected fixed widths: subject=%d current=%d",
 			cols[0].Width,
 			cols[1].Width,
-			cols[2].Width,
 		)
 	}
-	if cols[3].Width < 16 {
-		t.Fatalf("expected NEXT width >= 16, got %d", cols[3].Width)
+	if cols[2].Width < 16 {
+		t.Fatalf("expected NEXT STEP width >= 16, got %d", cols[2].Width)
 	}
 }
 
@@ -256,7 +126,7 @@ func TestSessionsUI_BrowseLayoutFitsNarrowViewports(t *testing.T) {
 	}
 	m.applyBrowseTableLayout()
 	cols := m.table.Columns()
-	totalCols := cols[0].Width + cols[1].Width + cols[2].Width + cols[3].Width + 10
+	totalCols := cols[0].Width + cols[1].Width + cols[2].Width + 8
 	if totalCols > 120 {
 		t.Fatalf("expected columns to fit viewport, got total=%d viewport=120", totalCols)
 	}
@@ -264,7 +134,6 @@ func TestSessionsUI_BrowseLayoutFitsNarrowViewports(t *testing.T) {
 
 func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 	m := sessionsSwitchboardModel{
-		actionCursor: sessionActionCursorFocus,
 		browseEntries: []browseEntry{
 			{
 				kind: browseEntrySession,
@@ -275,14 +144,14 @@ func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 		},
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Cameron Boehmer", "", "", "")}),
+			table.WithRows([]table.Row{testSessionsBrowseRow("Cameron Boehmer", "", "")}),
 		),
 	}
 
 	empty := browseEntry{kind: browseEntryEmpty}
-	subject, focused, step, next := m.renderEntryRow(empty)
-	if subject != "no open sessions" || focused != "" || step != "" || next != "" {
-		t.Fatalf("unexpected empty row snapshot: %q | %q | %q | %q", subject, focused, step, next)
+	subject, current, next := m.renderEntryRow(empty)
+	if subject != "no open sessions" || current != "" || next != "" {
+		t.Fatalf("unexpected empty row snapshot: %q | %q | %q", subject, current, next)
 	}
 
 	rec := sessionRecord{
@@ -293,437 +162,13 @@ func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 		StepCount:     3,
 		NextStep:      "Second Exposure",
 	}
-	subject, focused, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	if subject != "Cameron Boehmer" || step != "[2/3] Ground" {
-		t.Fatalf("unexpected unarmed row snapshot: %q | %q", subject, step)
-	}
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(focused))) != focusedActionMarker+"focus" {
-		t.Fatalf("unexpected focused focused-cell snapshot: %q", stripInternalMarkers(stripANSI(focused)))
-	}
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(next))) != "Second Exposure" {
-		t.Fatalf("unexpected unfocused next-step snapshot: %q", stripInternalMarkers(stripANSI(next)))
-	}
-
-	m.actionCursor = sessionActionCursorNextStep
-	_, focused, _, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(focused))) != "" {
-		t.Fatalf("unexpected unfocused focused-cell snapshot: %q", stripInternalMarkers(stripANSI(focused)))
-	}
-	if strings.TrimSpace(stripInternalMarkers(stripANSI(next))) != focusedActionMarker+"Second Exposure" {
-		t.Fatalf("unexpected focused next-step snapshot: %q", stripInternalMarkers(stripANSI(next)))
+	subject, current, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
+	if subject != "Cameron Boehmer" || current != "[2/3] Ground" || next != "Second Exposure" {
+		t.Fatalf("unexpected row snapshot: %q | %q | %q", subject, current, next)
 	}
 }
 
-func TestSessionsUI_FocusInvariant_ExactlyOneActionCellHighlighted(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		actionCursor: sessionActionCursorFocus,
-		browseEntries: []browseEntry{
-			{
-				kind: browseEntrySession,
-				record: sessionRecord{
-					Slug: "s1",
-				},
-			},
-		},
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "", "", "")}),
-		),
-	}
-	rec := sessionRecord{
-		Slug:          "s1",
-		SubjectNames:  []string{"Alpha"},
-		CurrentStep:   "Ground",
-		ProgressSteps: 1,
-		StepCount:     3,
-		NextStep:      "Second Exposure",
-	}
-
-	_, focused, step, next := m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	assertSingleFocusedActionCell(t, focused, step, next)
-	if strings.Contains(stripANSI(step), focusedActionMarker) {
-		t.Fatalf("step column must never show focus markers, got %q", stripANSI(step))
-	}
-
-	m.actionCursor = sessionActionCursorNextStep
-	_, focused, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	assertSingleFocusedActionCell(t, focused, step, next)
-	if strings.Contains(stripANSI(step), focusedActionMarker) {
-		t.Fatalf("step column must never show focus markers, got %q", stripANSI(step))
-	}
-}
-
-func TestSessionsUI_Interaction_RightLeftMovesSingleVisibleFocus(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				CurrentStep:   "Ground",
-				ProgressSteps: 1,
-				StepCount:     3,
-				NextStep:      "Second Exposure",
-			},
-		},
-		browseEntries: []browseEntry{
-			{
-				kind: browseEntrySession,
-				record: sessionRecord{
-					Slug: "s1",
-				},
-			},
-		},
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "", "", "")}),
-		),
-		filter: newSessionsFilterInput(),
-	}
-	rec := sessionRecord{
-		Slug:          "s1",
-		SubjectNames:  []string{"Alpha"},
-		CurrentStep:   "Ground",
-		ProgressSteps: 1,
-		StepCount:     3,
-		NextStep:      "Second Exposure",
-	}
-	m.table.SetWidth(120)
-	m.applyBrowseEntries()
-
-	_, focused, step, next := m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	assertSingleFocusedActionCell(t, focused, step, next)
-
-	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	m = updated.(sessionsSwitchboardModel)
-	_, focused, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	assertSingleFocusedActionCell(t, focused, step, next)
-
-	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	m = updated.(sessionsSwitchboardModel)
-	_, focused, step, next = m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
-	assertSingleFocusedActionCell(t, focused, step, next)
-}
-
-func TestSessionsUI_TableRowMapping_ActiveAndStepDoNotShift(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				ProgressSteps: 3,
-				StepCount:     3,
-				CurrentStep:   "Third Step",
-				NextStep:      "conclude",
-				Active:        true,
-			},
-		},
-	}
-
-	m.applyBrowseEntries()
-	rows := m.table.Rows()
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 table row, got %d", len(rows))
-	}
-	if strings.TrimSpace(stripANSI(rows[0][1])) != focusedActionMarker+"focused" {
-		t.Fatalf("expected ACTIVE column focus token in col 2, got %q", strings.TrimSpace(stripANSI(rows[0][1])))
-	}
-	if !strings.HasPrefix(rows[0][2], "[3/3]") {
-		t.Fatalf("expected STEP column progress text in col 3, got %q", rows[0][2])
-	}
-	if strings.TrimSpace(stripANSI(rows[0][3])) != "conclude" {
-		t.Fatalf("expected NEXT column conclude in col 4, got %q", strings.TrimSpace(stripANSI(rows[0][3])))
-	}
-
-	m.actionCursor = sessionActionCursorNextStep
-	m.applyBrowseEntries()
-	rows = m.table.Rows()
-	if strings.TrimSpace(stripANSI(rows[0][1])) != "focused" {
-		t.Fatalf("expected ACTIVE column unfocused text in col 2, got %q", strings.TrimSpace(stripANSI(rows[0][1])))
-	}
-	if strings.TrimSpace(stripANSI(rows[0][3])) != focusedActionMarker+"conclude" {
-		t.Fatalf("expected NEXT column focus token in col 4, got %q", strings.TrimSpace(stripANSI(rows[0][3])))
-	}
-}
-
-func TestSessionsUI_FocusedSessionPinnedToTop(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:              sessionsViewBrowse,
-		actionCursor:      sessionActionCursorFocus,
-		activeSessionSlug: "s2",
-		filter:            newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{Slug: "s1", SubjectNames: []string{"Alpha"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3},
-			{Slug: "s2", SubjectNames: []string{"Beta"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3, Active: true},
-		},
-	}
-	m.applyBrowseEntries()
-	rows := m.table.Rows()
-	if len(rows) < 2 {
-		t.Fatalf("expected at least 2 rows, got %d", len(rows))
-	}
-	if rows[0][0] != "Beta" {
-		t.Fatalf("expected focused session s2 pinned to top, got first row %q", rows[0][0])
-	}
-}
-
-func TestSessionsUI_ViewStylesFocusedTokensPostRender(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithHeight(4),
-		),
-		browseRecords: []sessionRecord{
-			{
-				Slug:          "s1",
-				SubjectNames:  []string{"Alpha"},
-				ProgressSteps: 1,
-				StepCount:     3,
-				CurrentStep:   "Ground",
-				NextStep:      "Second Exposure",
-			},
-		},
-	}
-	m.table.SetWidth(120)
-	m.applyBrowseEntries()
-	out := m.View().Content
-	if !strings.Contains(out, focusedActionMarker+"focus") {
-		t.Fatalf("expected focused token in view output, got:\n%s", stripANSI(out))
-	}
-	if !strings.Contains(out, "\x1b[") {
-		t.Fatalf("expected ANSI styling in view output for focused token")
-	}
-}
-
-func TestSessionsUI_View_DefaultActionCellsAreStyledAsCTA(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		browseEntries: []browseEntry{
-			{
-				kind:   browseEntrySession,
-				record: sessionRecord{Slug: "s1"},
-			},
-		},
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "", "", "")}),
-			table.WithHeight(4),
-		),
-	}
-	rec := sessionRecord{
-		Slug:          "s1",
-		SubjectNames:  []string{"Alpha"},
-		ProgressSteps: 1,
-		StepCount:     3,
-		CurrentStep:   "Ground",
-		NextStep:      "Second Exposure",
-	}
-	m.browseRecords = []sessionRecord{rec}
-	m.table.SetWidth(120)
-	m.applyBrowseEntries()
-
-	out := m.View().Content
-	if count := countBackgroundANSI(out); count < 2 {
-		t.Fatalf("expected background CTA styling in both ACTIVE and NEXT cells, bg_count=%d", count)
-	}
-}
-
-func TestSessionsUI_View_LayoutOmitsStatusLinesButShowsKeyHints(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:              sessionsViewBrowse,
-		actionCursor:      sessionActionCursorFocus,
-		activeSessionSlug: "s-focused",
-		filter:            newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "focused", "[1/2] Ground", "Second")}),
-			table.WithHeight(4),
-		),
-	}
-	out := stripANSI(m.View().Content)
-	if !strings.Contains(out, "Sessions") {
-		t.Fatalf("expected Sessions title in output:\n%s", out)
-	}
-	firstLine := strings.SplitN(out, "\n", 2)[0]
-	if !strings.Contains(firstLine, "[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit") {
-		t.Fatalf("expected browse key hint on title line, got:\n%s", out)
-	}
-	if !strings.Contains(out, " filter: ") {
-		t.Fatalf("expected filter input in output:\n%s", out)
-	}
-	if strings.Contains(out, "enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit") {
-		t.Fatalf("did not expect legacy browse key hint footer in output:\n%s", out)
-	}
-	for _, hidden := range []string{
-		"focused session:",
-		"current step:",
-	} {
-		if strings.Contains(out, hidden) {
-			t.Fatalf("did not expect %q in browse output:\n%s", hidden, out)
-		}
-	}
-}
-
-func TestSessionsUI_View_LayoutOmitsSessionStateMessageLine(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:              sessionsViewBrowse,
-		actionCursor:      sessionActionCursorFocus,
-		activeSessionSlug: "s-focused",
-		message:           "session=s-focused state=advanced step=ground",
-		filter:            newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "focused", "[1/2] Ground", "Second")}),
-			table.WithHeight(4),
-		),
-	}
-
-	out := stripANSI(m.View().Content)
-	if strings.Contains(out, "session=s-focused state=advanced step=ground") {
-		t.Fatalf("did not expect session state message line in browse output:\n%s", out)
-	}
-}
-
-func TestSessionsUI_BrowseView_TitleHasBackgroundStyle(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:   sessionsViewBrowse,
-		filter: newSessionsFilterInput(),
-		table:  table.New(),
-	}
-	out := m.View().Content
-	firstLine := strings.SplitN(out, "\n", 2)[0]
-	if countBackgroundANSI(firstLine) < 1 {
-		t.Fatalf("expected browse title line to include background ANSI style, got %q", firstLine)
-	}
-}
-
-func TestSessionsUI_CreateAndPicker_TitleHaveBackgroundStyle(t *testing.T) {
-	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
-
-	switchboard := sessionsSwitchboardModel{
-		subjects:          subjects,
-		selectedBySubject: map[string]bool{},
-	}
-	switchboard.refreshCreateList()
-	switchboardOut := switchboard.View().Content
-	switchboardTitle := strings.SplitN(switchboardOut, "\n", 2)[0]
-	if countBackgroundANSI(switchboardTitle) < 1 {
-		t.Fatalf("expected sessions create title to include background ANSI style, got %q", switchboardTitle)
-	}
-
-	picker := newSessionCreatePickerModel(subjects, map[string]bool{})
-	pickerOut := picker.View().Content
-	pickerTitle := strings.SplitN(pickerOut, "\n", 2)[0]
-	if countBackgroundANSI(pickerTitle) < 1 {
-		t.Fatalf("expected shared picker title to include background ANSI style, got %q", pickerTitle)
-	}
-}
-
-func TestSessionsUI_DefaultActionCursorIsActiveColumn(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "", "")}),
-		),
-		browseEntries: []browseEntry{
-			{
-				kind: browseEntrySession,
-				record: sessionRecord{
-					Slug: "s1",
-				},
-			},
-		},
-		browseRecords: []sessionRecord{
-			{Slug: "s1"},
-		},
-	}
-
-	if m.actionCursor != sessionActionCursorFocus {
-		t.Fatalf("expected default action cursor in ACTIVE column, got %q", m.actionCursor)
-	}
-}
-
-func TestSessionsUI_ActionCursorMovesLeftRight(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		actionCursor: sessionActionCursorFocus,
-	}
-
-	m.moveActionCursorRight()
-	if m.actionCursor != sessionActionCursorNextStep {
-		t.Fatalf("expected right-arrow to move cursor to NEXT STEP, got %q", m.actionCursor)
-	}
-
-	m.moveActionCursorLeft()
-	if m.actionCursor != sessionActionCursorFocus {
-		t.Fatalf("expected left-arrow to move cursor back to ACTIVE, got %q", m.actionCursor)
-	}
-}
-
-func TestSessionsUI_BrowseFilter_AppendsLiteralLToQuery(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{}),
-		),
-	}
-
-	updated, _ := m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
-	m = updated.(sessionsSwitchboardModel)
-
-	if m.filter.Value() != "l" {
-		t.Fatalf("expected browse filter query to be l, got %q", m.filter.Value())
-	}
-}
-
-func TestSessionsUI_BrowseFilter_MatchesSessionSlugWithoutVisibleSlugColumn(t *testing.T) {
-	m := sessionsSwitchboardModel{
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
-		table: table.New(
-			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{}),
-		),
-		browseRecords: []sessionRecord{
-			{Slug: "18-02-2026-boehmer", SubjectNames: []string{"Cameron Boehmer"}, NextStep: "Second Exposure", ProgressSteps: 1, StepCount: 3},
-			{Slug: "19-02-2026-alpha", SubjectNames: []string{"Alice Alpha"}, NextStep: "Second Exposure", ProgressSteps: 1, StepCount: 3},
-		},
-	}
-
-	m.filter.SetValue("boehmer")
-	m.applyBrowseEntries()
-
-	rows := m.table.Rows()
-	if len(rows) != 1 {
-		t.Fatalf("expected one filtered row, got %d", len(rows))
-	}
-	if rows[0][0] != "Cameron Boehmer" {
-		t.Fatalf("expected slug filter to retain matching subject row, got %q", rows[0][0])
-	}
-}
-
-func TestSessionsUI_EnterOnActiveColumnActivatesSessionAndStartsFirstStep(t *testing.T) {
+func TestSessionsUI_EnterOnSelectedRowFocusesAndStartsFirstStep(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
 	protocol := testProtocol()
@@ -734,14 +179,13 @@ func TestSessionsUI_EnterOnActiveColumnActivatesSessionAndStartsFirstStep(t *tes
 	})
 
 	m := sessionsSwitchboardModel{
-		root:         root,
-		protocol:     protocol,
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
+		root:     root,
+		protocol: protocol,
+		view:     sessionsViewBrowse,
+		filter:   newSessionsFilterInput(),
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "", "")}),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
 		),
 		browseEntries: []browseEntry{
 			{
@@ -768,46 +212,295 @@ func TestSessionsUI_EnterOnActiveColumnActivatesSessionAndStartsFirstStep(t *tes
 		t.Fatalf("read first step frontmatter failed: %v", err)
 	}
 	if asString(stepFM["time_started"]) == "" {
-		t.Fatalf("expected first step to auto-start on activation")
+		t.Fatalf("expected first step to start on enter")
 	}
 }
 
-func TestSessionsUI_EnterOnNextStepAdvancesOnce(t *testing.T) {
+func TestSessionsUI_EnterOnFocusedRowAdvancesOnce(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
 	protocol := testProtocol()
 	slug := "01-01-2026-alpha"
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\nactive_session_slug: "+slug+"\n---\n\n# Study\n")
 	mustWriteSessionFile(t, root, slug, map[string]any{
 		"time_started": "10:00:00 01-01-2026",
 		"subject_ids":  []string{"sub-1"},
 	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:01:00 01-01-2026"},
+		},
+	}, "")
 
 	m := sessionsSwitchboardModel{
-		root:         root,
-		protocol:     protocol,
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorNextStep,
-		filter:       newSessionsFilterInput(),
+		root:              root,
+		protocol:          protocol,
+		view:              sessionsViewBrowse,
+		activeSessionSlug: slug,
+		filter:            newSessionsFilterInput(),
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "", "")}),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
 		),
 		browseEntries: []browseEntry{
 			{
 				kind: browseEntrySession,
 				record: sessionRecord{
-					Slug:       slug,
-					NextAction: "start",
+					Slug:          slug,
+					NextAction:    "advance",
+					ProgressSteps: 1,
+					Active:        true,
 				},
 			},
 		},
 	}
 
-	out, _ := m.handleBrowseEnter()
-	got := out.(sessionsSwitchboardModel)
-	if !strings.Contains(got.message, "state=started") {
-		t.Fatalf("expected started transition message, got %q", got.message)
+	_, _ = m.handleBrowseEnter()
+
+	firstStepFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read first step failed: %v", err)
+	}
+	if strings.TrimSpace(asString(firstStepFM["time_finished"])) == "" {
+		t.Fatalf("expected first step to finish on enter")
+	}
+	secondStepFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read second step failed: %v", err)
+	}
+	if strings.TrimSpace(asString(secondStepFM["time_started"])) == "" {
+		t.Fatalf("expected second step to start on enter")
+	}
+}
+
+func TestSessionsUI_EscUnfocusesActiveSessionAndClosesWindow(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\nactive_session_slug: s1\n---\n\n# Study\n")
+	mustWriteSessionFile(t, root, "s1", map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", "s1", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:01:00 01-01-2026"},
+		},
+	}, "")
+
+	m := sessionsSwitchboardModel{
+		root:              root,
+		protocol:          protocol,
+		view:              sessionsViewBrowse,
+		activeSessionSlug: "s1",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
+		),
+		browseEntries: []browseEntry{
+			{
+				kind: browseEntrySession,
+				record: sessionRecord{
+					Slug:          "s1",
+					NextAction:    "advance",
+					ProgressSteps: 1,
+					Active:        true,
+				},
+			},
+		},
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatalf("expected esc with focused session to stay in program")
+	}
+	got := updated.(sessionsSwitchboardModel)
+
+	fm, _, err := util.ReadFrontmatterFile(filepath.Join(root, "study.sg.md"))
+	if err != nil {
+		t.Fatalf("read study frontmatter failed: %v", err)
+	}
+	if gotSlug := strings.TrimSpace(asString(fm["active_session_slug"])); gotSlug != "" {
+		t.Fatalf("expected active_session_slug to be cleared, got %q", gotSlug)
+	}
+
+	stepFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", "s1", "step", "first-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read first step frontmatter failed: %v", err)
+	}
+	windows := focusWindowsFromFM(stepFM)
+	if len(windows) != 1 {
+		t.Fatalf("expected 1 focus window for s1, got %d", len(windows))
+	}
+	if strings.TrimSpace(asString(windows[0]["time_finished"])) == "" {
+		t.Fatalf("expected s1 focus window to be closed after unfocus")
+	}
+	if got.activeSessionSlug != "" {
+		t.Fatalf("expected model activeSessionSlug to be cleared, got %q", got.activeSessionSlug)
+	}
+}
+
+func TestSessionsUI_EscQuitsWhenNoSessionIsFocused(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "[1/2] Ground", "Second")}),
+		),
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatalf("expected esc without a focused session to quit")
+	}
+}
+
+func TestSessionsUI_FocusedSessionPinnedToTop(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewBrowse,
+		activeSessionSlug: "s2",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithHeight(4),
+		),
+		browseRecords: []sessionRecord{
+			{Slug: "s1", SubjectNames: []string{"Alpha"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3},
+			{Slug: "s2", SubjectNames: []string{"Beta"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3, Active: true},
+		},
+	}
+	m.applyBrowseEntries()
+	rows := m.table.Rows()
+	if len(rows) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(rows))
+	}
+	if stripANSI(rows[0][0]) != "Beta" {
+		t.Fatalf("expected focused session s2 pinned to top, got first row %q", rows[0][0])
+	}
+}
+
+func TestSessionsUI_FocusedRowUsesDistinctANSIStyling(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithHeight(4),
+		),
+		browseRecords: []sessionRecord{
+			{
+				Slug:          "s1",
+				SubjectNames:  []string{"Alpha"},
+				ProgressSteps: 1,
+				StepCount:     3,
+				CurrentStep:   "Ground",
+				NextStep:      "Second Exposure",
+				Active:        true,
+			},
+		},
+		activeSessionSlug: "s1",
+	}
+	m.table.SetWidth(120)
+	m.applyBrowseEntries()
+	row := strings.Join(m.table.Rows()[0], "")
+	if countBackgroundANSI(row) < 1 {
+		t.Fatalf("expected focused row to include background ANSI styling, got %q", row)
+	}
+}
+
+func TestSessionsUI_View_LayoutOmitsStatusLinesButShowsKeyHints(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewBrowse,
+		activeSessionSlug: "s-focused",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "[1/2] Ground", "Second")}),
+			table.WithHeight(4),
+		),
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "Sessions") {
+		t.Fatalf("expected Sessions title in output:\n%s", out)
+	}
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if !strings.Contains(firstLine, "[enter] next step // [ctrl+b] step backwards // [ctrl+a] open assets // [ctrl+n] create session // [p] publish // [esc] unfocus/quit") {
+		t.Fatalf("expected browse key hint on title line, got:\n%s", out)
+	}
+	if !strings.Contains(out, " filter: ") {
+		t.Fatalf("expected filter input in output:\n%s", out)
+	}
+	if strings.Contains(out, "enter to activate cell; ctrl+b to step backwards; ctrl+n to create session; p to publish; esc to quit") {
+		t.Fatalf("did not expect legacy browse key hint footer in output:\n%s", out)
+	}
+	for _, hidden := range []string{
+		"focused session:",
+		"current step:",
+	} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("did not expect %q in browse output:\n%s", hidden, out)
+		}
+	}
+}
+
+func TestSessionsUI_View_LayoutOmitsSessionStateMessageLine(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewBrowse,
+		activeSessionSlug: "s-focused",
+		message:           "session=s-focused state=advanced step=ground",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{testSessionsBrowseRow("Alpha", "[1/2] Ground", "Second")}),
+			table.WithHeight(4),
+		),
+	}
+
+	out := stripANSI(m.View().Content)
+	if strings.Contains(out, "session=s-focused state=advanced step=ground") {
+		t.Fatalf("did not expect session state message line in browse output:\n%s", out)
+	}
+}
+
+func TestSessionsUI_BrowseView_TitleHasBackgroundStyle(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table:  table.New(),
+	}
+	out := m.View().Content
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if countBackgroundANSI(firstLine) < 1 {
+		t.Fatalf("expected browse title line to include background ANSI style, got %q", firstLine)
+	}
+}
+
+func TestSessionsUI_BrowseFilter_MatchesSessionSlugWithoutVisibleSlugColumn(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{}),
+		),
+		browseRecords: []sessionRecord{
+			{Slug: "18-02-2026-boehmer", SubjectNames: []string{"Cameron Boehmer"}, NextStep: "Second Exposure", ProgressSteps: 1, StepCount: 3},
+			{Slug: "19-02-2026-alpha", SubjectNames: []string{"Alice Alpha"}, NextStep: "Second Exposure", ProgressSteps: 1, StepCount: 3},
+		},
+	}
+
+	m.filter.SetValue("boehmer")
+	m.applyBrowseEntries()
+
+	rows := m.table.Rows()
+	if len(rows) != 1 {
+		t.Fatalf("expected one filtered row, got %d", len(rows))
+	}
+	if rows[0][0] != "Cameron Boehmer" {
+		t.Fatalf("expected slug filter to retain matching subject row, got %q", rows[0][0])
 	}
 }
 
@@ -836,12 +529,11 @@ func TestSessionsUI_FocusSwitch_ClosesPreviousWindowAndOpensNewWindow(t *testing
 		root:              root,
 		protocol:          protocol,
 		view:              sessionsViewBrowse,
-		actionCursor:      sessionActionCursorFocus,
 		activeSessionSlug: "s1",
 		filter:            newSessionsFilterInput(),
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "", "")}),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
 		),
 		browseEntries: []browseEntry{
 			{
@@ -869,11 +561,11 @@ func TestSessionsUI_FocusSwitch_ClosesPreviousWindowAndOpensNewWindow(t *testing
 		t.Fatalf("expected s1 focus window to be closed after switching focus")
 	}
 
-	s2FM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", "s2", "step", "first-step", "step.sg.md"))
+	secondStepFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", "s2", "step", "second-step", "step.sg.md"))
 	if err != nil {
-		t.Fatalf("read s2 step failed: %v", err)
+		t.Fatalf("read s2 second step failed: %v", err)
 	}
-	s2Windows := focusWindowsFromFM(s2FM)
+	s2Windows := focusWindowsFromFM(secondStepFM)
 	if len(s2Windows) != 1 {
 		t.Fatalf("expected 1 focus window for s2, got %d", len(s2Windows))
 	}
@@ -907,14 +599,13 @@ func TestSessionsUI_FocusSwitch_SelectsTopRowAfterFocusedSessionPinned(t *testin
 		root:              root,
 		protocol:          protocol,
 		view:              sessionsViewBrowse,
-		actionCursor:      sessionActionCursorFocus,
 		activeSessionSlug: "s1",
 		filter:            newSessionsFilterInput(),
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
 			table.WithRows([]table.Row{
-				testSessionsBrowseRow("", "", "", ""),
-				testSessionsBrowseRow("", "", "", ""),
+				testSessionsBrowseRow("", "", ""),
+				testSessionsBrowseRow("", "", ""),
 			}),
 		),
 		browseEntries: []browseEntry{
@@ -965,14 +656,13 @@ func TestSessionsUI_CtrlBReversesSelectedSessionStep(t *testing.T) {
 	}, "")
 
 	m := sessionsSwitchboardModel{
-		root:         root,
-		protocol:     protocol,
-		view:         sessionsViewBrowse,
-		actionCursor: sessionActionCursorFocus,
-		filter:       newSessionsFilterInput(),
+		root:     root,
+		protocol: protocol,
+		view:     sessionsViewBrowse,
+		filter:   newSessionsFilterInput(),
 		table: table.New(
 			table.WithColumns(testSessionsBrowseColumns()),
-			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "", "")}),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
 		),
 		browseEntries: []browseEntry{
 			{
@@ -997,6 +687,84 @@ func TestSessionsUI_CtrlBReversesSelectedSessionStep(t *testing.T) {
 	}
 	if strings.TrimSpace(asString(stepFM["time_started"])) != "" {
 		t.Fatalf("expected first step time_started to be cleared")
+	}
+}
+
+func TestSessionsUI_CtrlAOpensSelectedSessionCurrentStepAssetFolder(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	slug := "01-01-2026-alpha"
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\nactive_session_slug: "+slug+"\n---\n\n# Study\n")
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+	}, "")
+
+	var opened string
+	m := sessionsSwitchboardModel{
+		root:              root,
+		protocol:          protocol,
+		view:              sessionsViewBrowse,
+		activeSessionSlug: slug,
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithRows([]table.Row{testSessionsBrowseRow("", "", "")}),
+		),
+		browseEntries: []browseEntry{
+			{
+				kind: browseEntrySession,
+				record: sessionRecord{
+					Slug:          slug,
+					NextAction:    "advance",
+					ProgressSteps: 1,
+					Active:        true,
+				},
+			},
+		},
+		openPathFunc: func(path string) error {
+			opened = path
+			return nil
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = updated.(sessionsSwitchboardModel)
+
+	want := filepath.Join(root, "session", slug, "step", "first-step", "asset")
+	if opened != want {
+		t.Fatalf("expected opened asset path %q, got %q", want, opened)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected asset directory to exist, got %v", err)
+	}
+	if m.message != "opened assets: "+want {
+		t.Fatalf("expected opened-assets message, got %q", m.message)
+	}
+}
+
+func TestSessionsUI_CreateAndPicker_TitleHaveBackgroundStyle(t *testing.T) {
+	subjects := []store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}}
+
+	switchboard := sessionsSwitchboardModel{
+		subjects:          subjects,
+		selectedBySubject: map[string]bool{},
+	}
+	switchboard.refreshCreateList()
+	switchboardOut := switchboard.View().Content
+	switchboardTitle := strings.SplitN(switchboardOut, "\n", 2)[0]
+	if countBackgroundANSI(switchboardTitle) < 1 {
+		t.Fatalf("expected sessions create title to include background ANSI style, got %q", switchboardTitle)
+	}
+
+	picker := newSessionCreatePickerModel(subjects, map[string]bool{})
+	pickerOut := picker.View().Content
+	pickerTitle := strings.SplitN(pickerOut, "\n", 2)[0]
+	if countBackgroundANSI(pickerTitle) < 1 {
+		t.Fatalf("expected shared picker title to include background ANSI style, got %q", pickerTitle)
 	}
 }
 
@@ -1426,39 +1194,9 @@ func stripANSI(s string) string {
 	return re.ReplaceAllString(s, "")
 }
 
-func stripInternalMarkers(s string) string {
-	return strings.NewReplacer("\x1e", "", "\x1f", "").Replace(s)
-}
-
 func countBackgroundANSI(s string) int {
 	re := regexp.MustCompile(`\x1b\[[0-9;]*48;`)
 	return len(re.FindAllString(s, -1))
-}
-
-func assertSingleFocusedActionCell(t *testing.T, activeCell, stepCell, nextCell string) {
-	t.Helper()
-	activePlain := stripANSI(activeCell)
-	stepPlain := stripANSI(stepCell)
-	nextPlain := stripANSI(nextCell)
-	focused := 0
-	if strings.Contains(activePlain, focusedActionMarker) {
-		focused++
-	}
-	if strings.Contains(stepPlain, focusedActionMarker) {
-		focused++
-	}
-	if strings.Contains(nextPlain, focusedActionMarker) {
-		focused++
-	}
-	if focused != 1 {
-		t.Fatalf(
-			"expected exactly one focused actionable cell, got=%d focused=%q step=%q next=%q",
-			focused,
-			activePlain,
-			stepPlain,
-			nextPlain,
-		)
-	}
 }
 
 func focusWindowsFromFM(fm map[string]any) []map[string]any {

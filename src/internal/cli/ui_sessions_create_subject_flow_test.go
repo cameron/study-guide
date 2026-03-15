@@ -133,6 +133,24 @@ func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t
 	}
 }
 
+func TestSessionCreatePicker_ListHeightExpandsWithViewport(t *testing.T) {
+	m := newSessionCreatePickerModel(
+		[]store.Subject{{UUID: "abc12345-0000-0000-0000-000000000000", Name: "Alpha Subject"}},
+		map[string]bool{},
+	)
+
+	initialHeight := m.list.Height()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(sessionCreatePickerModel)
+
+	if got, want := m.list.Height(), 22; got != want {
+		t.Fatalf("expected shared picker list height to track viewport height, got %d want %d", got, want)
+	}
+	if m.list.Height() <= initialHeight {
+		t.Fatalf("expected list height to grow beyond initial fixed height, got initial=%d current=%d", initialHeight, m.list.Height())
+	}
+}
+
 func selectedSubjectNames(subjects []store.Subject) string {
 	names := make([]string, 0, len(subjects))
 	for _, s := range subjects {

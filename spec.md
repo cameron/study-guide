@@ -270,74 +270,68 @@ Interactive session switchboard for running multiple sessions in parallel from o
 Behavior:
 1. Shows only incomplete sessions.
 2. Provides an autocomplete query over subject name and session slug.
-3. Browse table columns are ordered: `SUBJECT | FOCUSED | STEP | NEXT`.
-4. `FOCUSED` and `NEXT` columns are actionable cells.
-5. The selected row (default top row) always has an active action cursor.
-6. Arrow key behavior:
+3. Browse table columns are ordered: `SUBJECT | CURRENT STEP | NEXT STEP`.
+4. The selected row (default top row) is the row that keyboard actions apply to.
+5. Arrow key behavior:
 - up/down: move selected row
-- left/right: move action cursor between `FOCUSED` and `NEXT` in the selected row
-  Typing into the browse filter is literal text entry (for example `l` appends `l` to the query) and must not trigger action-cursor movement.
-7. Press `Enter` to execute the action under the active action cursor:
-- `FOCUSED`: mark that session as the single focused session in study frontmatter (`study.sg.md` key `active_session_slug`); if the session has not started any protocol step yet, also auto-start its first step
-- `NEXT`: perform exactly one timing transition (`start`, `advance`, or `finish`) based on current session progress
+- typing into the browse filter is ordinary text entry and must not trigger any session action
+6. Press `Enter` to perform the selected row's next transition:
+- if that row is not focused, first mark it as the single focused session in study frontmatter (`study.sg.md` key `active_session_slug`)
+- if another session was focused, close that previous focused session's open `focus_windows` interval (if any active step exists)
+- then perform exactly one timing transition (`start`, `advance`, or `finish`) for the selected row based on current session progress
+- if the session has not started any protocol step yet, this starts its first step as part of that same `Enter`
    Focus tracking contract:
    - switching focus closes the previous focused session's open `focus_windows` interval (if any active step exists) and opens a new interval on the newly focused session's active step (if any)
    - when a focused session advances/reverses/finishes, `focus_windows` follow the active step so there is never more than one open focus interval per session
-8. Press `Esc` to quit browse view.
+7. Press `ctrl+a` in browse view to open the selected session's current step asset folder in Finder.
+   If the current step asset folder does not exist yet, create it first.
+8. Press `Esc` in browse view to:
+- unfocus the active session, clear `active_session_slug`, and close that session's open `focus_windows` interval when any session is currently focused
+- quit browse view when no session is currently focused
 9. Includes an action to create a new session without leaving the switchboard.
 10. The session list view uses compact single-line rows (no blank description line).
-   Unarmed row format includes step progress: `<subject> | <X>/<Y> <current step>`.
    The browse view is implemented with a table component (column headers visible).
-   Step progress is rendered as `[X/Y]`.
+   `CURRENT STEP` is rendered as `[X/Y] <current step>`.
+   `NEXT STEP` shows the next transition target label (or `conclude` when the next action is `finish`).
    `X` is the count of protocol steps progressed so far (implicitly-finished earlier steps count, plus the currently active step when present).
 11. The list control/help legend is hidden on this screen.
 12. Browse view does not render extra status summary lines above or below the table (except the key-hint footer line). This includes per-action session state/result text (for example `session=<slug> state=...`) which must not be shown in the browse layout.
-13. In selected row, the focused actionable cell is visually emphasized (high-contrast and prefixed with a return-arrow marker).
-14. `FOCUSED` column text is:
-- always `focused` when row is the currently focused session
-- `focus` when row is selected, not focused, and action cursor is on `FOCUSED`
-- empty for non-selected rows and for selected rows while action cursor is on `NEXT`
-  When the active action cursor is on `FOCUSED`, the visible text is prefixed with `↳ ` (for example `↳ focused` or `↳ focus`).
-15. `NEXT` column shows the next transition label (or `conclude` when progress action is `finish`).
-   Actionable cells (`FOCUSED` and `NEXT`) use Bubble-family greens with focused brighter than unfocused:
-   unfocused light `#026846`, unfocused dark `#4f6122`, focused light `#04b575`, focused dark `#93ad3f`.
-   Action-cell text is light in both focused and unfocused states.
-   Focused state is emphasized by marker + bold.
-   When actionable cell text is otherwise empty, render exactly 8 spaces so background styling remains visible.
-16. Browse table selected-row styling uses Bubble's default pink selected text treatment (foreground emphasis), not a custom full-row background tint.
+13. Browse table selected-row styling uses Bubble's default pink selected text treatment (foreground emphasis).
    This pink selected styling applies to the sessions browse table and create-mode subject list.
-17. Browse table column sizing should be responsive to viewport width while prioritizing `STEP` readability; on wide viewports use preferred widths `SLUG=35`, `SUBJECT=35`, `FOCUSED=24`, `STEP=48`, and assign remaining width to `NEXT` (minimum `16`).
-18. Browse layout order is:
+14. The focused session row is visually separated from the other rows with a subtle green treatment that does not rely on inserting a selectable blank row.
+15. Browse table column sizing should be responsive to viewport width while prioritizing `CURRENT STEP` readability; on wide viewports use preferred widths `SUBJECT=35`, `CURRENT STEP=48`, and assign remaining width to `NEXT STEP` (minimum `16`).
+16. Browse layout order is:
 - `Sessions` title line with inline key legend rendered on the same line in the format `[key] description // [key] description // ...`
 - filter input (` filter: ` prompt)
 - open-sessions table (headers + body)
    Filter inputs (browse + shared create picker) use a distinct accent style:
    prompt color uses the same adaptive blue as title bars (`#78f0ff` light, `#1490a0` dark), query text ANSI `212` (pink), placeholder ANSI `245` (dim).
-19. Focused session row is always pinned to the top of the open-sessions list.
-20. After focusing a session from browse view, the selected row moves to the top focused row.
-21. Filter placeholder text is exactly `by subject or slug`.
-22. Browse table does not include `Create new session` or `Exit` rows.
+17. Focused session row is always pinned to the top of the open-sessions list.
+18. After focusing a session from browse view, the selected row moves to the top focused row.
+19. Filter placeholder text is exactly `by subject or slug`.
+20. Browse table does not include `Create new session` or `Exit` rows.
    When there are no incomplete sessions, the table shows a single empty-state row: `no open sessions`.
-23. Browse title-line key hint is: `[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit`.
-24. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
-25. Create mode header text is exactly `Create Session`; instructional copy (`select a subject, then confirm Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-26. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above the create-confirmation row.
-27. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
-28. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
-29. Create-mode list item labels are uniformly indented with exactly two leading spaces.
-30. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
-31. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
-32. `p` triggers publish from browse view (keyboard action; not a table row).
-33. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
-34. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then return to the picker without stale rows leaking between the two screens.
-35. In the shared create-session picker (used by both `sg session` and `sg sessions`), typing immediately starts fuzzy autocomplete filtering over subject names (without requiring `/`).
-36. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for the current create-confirmation row.
-37. In create mode of that same shared picker, the subject filter/search input is always visible before typing.
-38. In create mode of that same shared picker, clearing the subject filter query (for example backspacing from one character to empty) must not duplicate the `Filter:` line, and subject rows remain selectable.
-39. In create mode of that same shared picker, when the subject filter query changes, the filtered results must auto-select the top visible entry.
-40. Create-mode selected subject row styling uses Bubble's default pink selected color, and this selected styling must apply to the auto-selected top entry while filtering.
-41. In create mode of the shared create-session picker, pressing `enter` on a subject chooses exactly that subject, rewrites the create-confirmation row label to `-> Create Session with <subject>`, and moves selection to that row instead of building a multi-subject selection list.
-42. In `sg sessions` create mode and the shared `sg session` picker, subject rows are ordered by most recently created first, so a subject created from `(+) New subject` returns at the top of the picker.
+20. Browse title-line key hint is: `[enter] next step // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] unfocus/quit`.
+21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
+22. Create mode header text is exactly `Create Session`; instructional copy (`select a subject, then confirm Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above the create-confirmation row.
+24. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
+25. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
+26. Create-mode list item labels are uniformly indented with exactly two leading spaces.
+27. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
+28. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
+29. `p` triggers publish from browse view (keyboard action; not a table row).
+30. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
+31. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then return to the picker without stale rows leaking between the two screens.
+32. In the shared create-session picker (used by both `sg session` and `sg sessions`), typing immediately starts fuzzy autocomplete filtering over subject names (without requiring `/`).
+33. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for the current create-confirmation row.
+34. In create mode of that same shared picker, the subject filter/search input is always visible before typing.
+35. In create mode of that same shared picker, clearing the subject filter query (for example backspacing from one character to empty) must not duplicate the `Filter:` line, and subject rows remain selectable.
+36. In create mode of that same shared picker, when the subject filter query changes, the filtered results must auto-select the top visible entry.
+37. Create-mode selected subject row styling uses Bubble's default pink selected color, and this selected styling must apply to the auto-selected top entry while filtering.
+38. In create mode of the shared create-session picker, pressing `enter` on a subject chooses exactly that subject, rewrites the create-confirmation row label to `-> Create Session with <subject>`, and moves selection to that row instead of building a multi-subject selection list.
+39. In `sg sessions` create mode and the shared `sg session` picker, subject rows are ordered by most recently created first, so a subject created from `(+) New subject` returns at the top of the picker.
+40. In create mode of the shared create-session picker, the subject list height must expand with the terminal viewport instead of staying at a short fixed height, so available subjects can fill the screen.
 
 Rule: this command enables switching among concurrent sessions without changing directories.
 Rule: any number of sessions may be in-progress concurrently.
@@ -523,23 +517,23 @@ All criteria below are pass/fail requirements for v1.
 7. Step times are written by `sg session` and never inferred from ingested media.
 8. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
-11. In `sg sessions`, `Enter` executes the currently focused action cell: `FOCUSED` sets `active_session_slug` and auto-starts the first step when the session has not started any step yet; `NEXT` performs one transition (`start`, `advance`, or `finish`).
+11. In `sg sessions`, `Enter` applies to the selected row: it focuses that session if needed, then performs exactly one transition (`start`, `advance`, or `finish`) for that row.
 11a. `sg sessions` records focus ownership per step via `focus_windows` in step frontmatter; focus switches close the previous focused interval and open the next focused interval.
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
 13. `sg session advance` works from within a session directory without requiring `cd` to other sessions.
 14. `sg session advance --session <slug>` advances a specific session from study root (or any path within the study).
-15. `sg sessions` uses one list view for arm-and-confirm (no separate confirm screen and no `Back` option); `Esc` cancels armed actions.
+15. In `sg sessions`, `Esc` unfocuses the active session when one is focused; otherwise it exits the browse view.
 16. `sg sessions` view hides list control/help context and does not show extra browse status summary lines; it keeps the browse key-hint footer.
-17. In `sg sessions`, arming an action updates that same session row inline with `<X>/<Y>` progress and `enter to ...?` copy (no floating confirmation block below the list).
-18. `sg sessions` shows `esc to cancel` helper text in subtle/grey style while an action is armed.
-19. `sg sessions` progress numerator `X` in `[X/Y]` reflects progressed steps, not only active-step index; when no step is currently active but later protocol steps remain, `X` equals the number of completed steps.
+17. `sg sessions` progress numerator `X` in `[X/Y]` reflects progressed steps, not only active-step index; when no step is currently active but later protocol steps remain, `X` equals the number of completed steps.
+18. `sg sessions` keeps separate selected-row and focused-session concepts: selection follows the cursor, while focus is the session named by `active_session_slug`.
+19. `sg sessions` visually distinguishes the focused row without inserting a selectable spacer row.
 20. In `sg sessions`, pressing `p` triggers publish from browse view.
 21. `sg session reverse` clears `time_started` on the active step only and keeps step files/folders intact.
 22. In `sg sessions`, pressing `ctrl+b` performs the same single-step reverse transition as `sg session reverse` for the selected row.
+23. In `sg sessions`, pressing `ctrl+a` opens the selected session's current step asset folder, creating the `asset/` directory first when needed.
 23. `sg sessions print` outputs one timing row per protocol step per session in an aligned Bubble Tea table with `SESSION | STEP | START | END` columns.
 24. In `sg sessions` create mode and the shared `sg session` picker, clearing the subject filter query preserves single-line filter rendering and keeps subject rows selectable.
 25. In `sg sessions` create mode and the shared `sg session` picker, typing/changing a subject filter auto-selects the top filtered subject entry.
-26. In `sg sessions` browse mode, typing `l` in the filter input appends `l` to the query and does not move the action cursor.
 27. In `sg sessions` create mode and the shared `sg session` picker, subject rows are ordered by most recently created first, so a subject created from `(+) New subject` returns at the top of the picker.
 
 ### E. Photo Ingestion

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -55,7 +56,6 @@ type sessionsSwitchboardModel struct {
 	browseEntries []browseEntry
 
 	createLookup           map[string]string
-	actionCursor           sessionActionCursor
 	activeSessionSlug      string
 	finishedSessionCount   int
 	inProgressSessionCount int
@@ -63,6 +63,7 @@ type sessionsSwitchboardModel struct {
 	selectedBySubject      map[string]bool
 	createSubjectForm      formModel
 	publishFunc            func(string) error
+	openPathFunc           func(string) error
 
 	message string
 	err     error
@@ -73,28 +74,14 @@ var subtleTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 var filterPromptStyle = lipgloss.NewStyle().Foreground(paletteBlueAccentAdaptive)
 var filterQueryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 var filterPlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-var selectedRowTintLight = color.RGBA{R: 0xd9, G: 0xdc, B: 0xef, A: 0xff}
-var selectedRowTintDark = color.RGBA{R: 0x26, G: 0x2b, B: 0x3a, A: 0xff}
-
-const selectedRowBackgroundANSILight = "\x1b[48;2;217;220;239m"
-const selectedRowBackgroundANSIDark = "\x1b[48;2;38;43;58m"
 
 const sessionsCreateInfoText = "select a subject, then confirm Create; esc to cancel"
 const sessionsBrowseFilterPlaceholder = "by subject or slug"
 const sessionsCreateFilterPlaceholder = "by subject name"
-const sessionsBrowseTitleKeyHint = "[enter] activate cell // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] quit"
+const sessionsBrowseTitleKeyHint = "[enter] next step // [ctrl+b] step backwards // [ctrl+a] open assets // [ctrl+n] create session // [p] publish // [esc] unfocus/quit"
 const sessionsCreateItemIndent = "  "
 const sessionsCreateActionCreateSubject = "(+) New subject"
 const sessionsCreateActionCreateSession = "-> Create Session"
-const emptyActionCellSpaceFill = 8
-const focusedActionMarker = "↳ "
-
-type sessionActionCursor string
-
-const (
-	sessionActionCursorFocus    sessionActionCursor = "focus"
-	sessionActionCursorNextStep sessionActionCursor = "next-step"
-)
 
 func sessionsNextStepTextStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
@@ -195,36 +182,11 @@ func sessionsSelectedRowStyle(base lipgloss.Style) lipgloss.Style {
 		Bold(false)
 }
 
-func actionCellStyle(isFocused bool) lipgloss.Style {
-	fg := lipgloss.Color("255")
-	bg := compat.AdaptiveColor{
-		Light: color.RGBA{R: 0x02, G: 0x68, B: 0x46, A: 0xff},
-		Dark:  color.RGBA{R: 0x4f, G: 0x61, B: 0x22, A: 0xff},
-	}
-	if isFocused {
-		bg = compat.AdaptiveColor{
-			Light: color.RGBA{R: 0x04, G: 0xb5, B: 0x75, A: 0xff},
-			Dark:  color.RGBA{R: 0x93, G: 0xad, B: 0x3f, A: 0xff},
-		}
-	}
-	return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(isFocused)
-}
-
-func selectedRowBackgroundANSI() string {
-	if compat.HasDarkBackground {
-		return selectedRowBackgroundANSIDark
-	}
-	return selectedRowBackgroundANSILight
-}
-
-func renderActionCell(text string, isFocused, inSelectedRow bool, width int) string {
-	if text == "" {
-		text = strings.Repeat(" ", emptyActionCellSpaceFill)
-	}
-	out := actionCellStyle(isFocused).Render(text)
-	_ = inSelectedRow
-	_ = width
-	return out
+func focusedBrowseRowCellStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(compat.AdaptiveColor{
+		Light: color.RGBA{R: 0xed, G: 0xf5, B: 0xee, A: 0xff},
+		Dark:  color.RGBA{R: 0x1f, G: 0x29, B: 0x20, A: 0xff},
+	})
 }
 
 func runSessionsSwitchboard(root string, protocol store.Protocol) error {
@@ -244,9 +206,8 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 	tbl := table.New(
 		table.WithColumns([]table.Column{
 			{Title: "SUBJECT", Width: 30},
-			{Title: "FOCUSED", Width: 24},
-			{Title: "STEP", Width: 24},
-			{Title: "NEXT", Width: 52},
+			{Title: "CURRENT STEP", Width: 30},
+			{Title: "NEXT STEP", Width: 40},
 		}),
 		table.WithRows(nil),
 		table.WithFocused(true),
@@ -267,7 +228,6 @@ func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessions
 		filter:            fi,
 		list:              createList,
 		selectedBySubject: map[string]bool{},
-		actionCursor:      sessionActionCursorFocus,
 		width:             120,
 	}
 	m.applyBrowseTableLayout()
@@ -284,7 +244,7 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = max(msg.Width-2, 60)
 		m.applyBrowseTableLayout()
-		m.list.SetSize(max(msg.Width-2, 60), max(msg.Height-8, 8))
+		sizeCreateSessionList(&m.list, msg.Width, msg.Height)
 		m.filter.SetWidth(max(msg.Width-18, 20))
 	case tea.KeyPressMsg:
 		if m.view == sessionsViewCreateSubject {
@@ -325,7 +285,7 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			switch m.view {
 			case sessionsViewBrowse:
-				return m, tea.Quit
+				return m.handleBrowseEscape()
 			case sessionsViewCreate:
 				if err := m.refreshBrowseList(); err != nil {
 					m.err = err
@@ -353,21 +313,13 @@ func (m sessionsSwitchboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		case "left":
-			if m.view == sessionsViewBrowse {
-				m.moveActionCursorLeft()
-				m.applyBrowseEntries()
-				return m, nil
-			}
-		case "right":
-			if m.view == sessionsViewBrowse {
-				m.moveActionCursorRight()
-				m.applyBrowseEntries()
-				return m, nil
-			}
 		case "ctrl+b":
 			if m.view == sessionsViewBrowse {
 				return m.handleBrowseReverse()
+			}
+		case "ctrl+a":
+			if m.view == sessionsViewBrowse {
+				return m.handleBrowseOpenAssets()
 			}
 		}
 	}
@@ -447,45 +399,18 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 			m.message = "invalid: " + rec.InvalidReason
 			return m, nil
 		}
-		if m.actionCursor == sessionActionCursorFocus {
-			now := util.NowTimestamp()
-			if strings.TrimSpace(m.activeSessionSlug) != "" && m.activeSessionSlug != rec.Slug {
-				if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
-					m.message = "focus failed: " + err.Error()
-					return m, nil
-				}
+		now := util.NowTimestamp()
+		if strings.TrimSpace(m.activeSessionSlug) != "" && m.activeSessionSlug != rec.Slug {
+			if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
+				m.message = "focus failed: " + err.Error()
+				return m, nil
 			}
+		}
+		if !rec.Active {
 			if err := setActiveSessionSlug(m.root, rec.Slug); err != nil {
 				m.message = "focus failed: " + err.Error()
 				return m, nil
 			}
-			if rec.NextAction == "start" && rec.ProgressSteps == 0 {
-				res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
-				if err != nil {
-					m.message = "focus failed: " + err.Error()
-					return m, nil
-				}
-				if err := m.refreshBrowseList(); err != nil {
-					m.err = err
-					return m, tea.Quit
-				}
-				m.table.SetCursor(0)
-				m.applyBrowseEntries()
-				m.message = fmt.Sprintf("session=%s state=focused+%s step=%s", rec.Slug, res.State, res.StepSlug)
-				return m, nil
-			}
-			if err := syncFocusedSessionWindows(m.root, rec.Slug, m.protocol, now); err != nil {
-				m.message = "focus failed: " + err.Error()
-				return m, nil
-			}
-			if err := m.refreshBrowseList(); err != nil {
-				m.err = err
-				return m, tea.Quit
-			}
-			m.table.SetCursor(0)
-			m.applyBrowseEntries()
-			m.message = fmt.Sprintf("session=%s state=focused", rec.Slug)
-			return m, nil
 		}
 		res, err := advanceSessionOnce(m.root, rec.Slug, m.protocol)
 		if err != nil {
@@ -501,6 +426,27 @@ func (m sessionsSwitchboardModel) handleBrowseEnter() (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+func (m sessionsSwitchboardModel) handleBrowseEscape() (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(m.activeSessionSlug) == "" {
+		return m, tea.Quit
+	}
+	now := util.NowTimestamp()
+	if err := closeFocusedSessionWindows(m.root, m.activeSessionSlug, m.protocol, now); err != nil {
+		m.message = "unfocus failed: " + err.Error()
+		return m, nil
+	}
+	if err := setActiveSessionSlug(m.root, ""); err != nil {
+		m.message = "unfocus failed: " + err.Error()
+		return m, nil
+	}
+	if err := m.refreshBrowseList(); err != nil {
+		m.err = err
+		return m, tea.Quit
+	}
+	m.applyBrowseEntries()
+	return m, nil
 }
 
 func (m sessionsSwitchboardModel) handleBrowseReverse() (tea.Model, tea.Cmd) {
@@ -523,6 +469,28 @@ func (m sessionsSwitchboardModel) handleBrowseReverse() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.message = fmt.Sprintf("session=%s state=%s step=%s", rec.Slug, res.State, res.StepSlug)
+	return m, nil
+}
+
+func (m sessionsSwitchboardModel) handleBrowseOpenAssets() (tea.Model, tea.Cmd) {
+	entry, ok := m.selectedBrowseEntry()
+	if !ok || entry.kind != browseEntrySession {
+		return m, nil
+	}
+	path, err := m.selectedSessionAssetPath(entry.record)
+	if err != nil {
+		m.message = "open assets failed: " + err.Error()
+		return m, nil
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		m.message = "open assets failed: " + err.Error()
+		return m, nil
+	}
+	if err := m.openPath(path); err != nil {
+		m.message = "open assets failed: " + err.Error()
+		return m, nil
+	}
+	m.message = "opened assets: " + path
 	return m, nil
 }
 
@@ -664,8 +632,8 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 		selectedSlug = entries[0].record.Slug
 	}
 	for i, e := range entries {
-		subject, active, step, nextStep := m.renderEntryRow(e)
-		rows = append(rows, table.Row{subject, active, step, nextStep})
+		subject, step, nextStep := m.renderEntryRow(e)
+		rows = append(rows, table.Row{subject, step, nextStep})
 		if e.kind == browseEntrySession && e.record.Slug == selectedSlug {
 			targetCursor = i
 		}
@@ -683,11 +651,11 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 	total := max(m.width, 60)
 	// Fit columns to viewport while preserving readability.
 	const (
-		overhead = 10
+		overhead = 8
 		nextMin  = 16
 	)
-	pref := []int{35, 24, 48}
-	mins := []int{14, 8, 20}
+	pref := []int{35, 48}
+	mins := []int{14, 20}
 	sumPref := 0
 	for _, w := range pref {
 		sumPref += w
@@ -717,25 +685,23 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 		}
 	}
 	subjectW := widths[0]
-	focusW := widths[1]
-	stepW := widths[2]
-	nextW := total - overhead - subjectW - focusW - stepW
+	stepW := widths[1]
+	nextW := total - overhead - subjectW - stepW
 	if nextW < nextMin {
 		nextW = nextMin
 	}
 	m.table.SetColumns([]table.Column{
 		{Title: "SUBJECT", Width: subjectW},
-		{Title: "FOCUSED", Width: focusW},
-		{Title: "STEP", Width: stepW},
-		{Title: "NEXT", Width: nextW},
+		{Title: "CURRENT STEP", Width: stepW},
+		{Title: "NEXT STEP", Width: nextW},
 	})
 	m.table.SetWidth(total)
 }
 
-func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string) {
+func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string) {
 	switch e.kind {
 	case browseEntryEmpty:
-		return "no open sessions", "", "", ""
+		return "no open sessions", "", ""
 	case browseEntrySession:
 		rec := e.record
 		subjectText := strings.Join(rec.SubjectNames, ", ")
@@ -767,50 +733,15 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if strings.TrimSpace(next) == "" {
 			next = "-"
 		}
-		selectedSlug := ""
-		if sel, ok := m.selectedBrowseEntry(); ok && sel.kind == browseEntrySession {
-			selectedSlug = sel.record.Slug
-		}
-		if selectedSlug == "" && len(m.browseEntries) > 0 && m.browseEntries[0].kind == browseEntrySession {
-			selectedSlug = m.browseEntries[0].record.Slug
-		}
-		focusWidth := 1
-		nextWidth := 1
-		cols := m.table.Columns()
-		if len(cols) >= 4 {
-			if cols[1].Width > 0 {
-				focusWidth = cols[1].Width
-			}
-			if cols[3].Width > 0 {
-				nextWidth = cols[3].Width
-			}
-		}
-		isSelected := rec.Slug == selectedSlug
-		focusBaseText := ""
 		if rec.Active {
-			focusBaseText = "focused"
+			style := focusedBrowseRowCellStyle()
+			subjectText = style.Render(subjectText)
+			stepText = style.Render(stepText)
+			next = style.Render(next)
 		}
-		focusStyled := renderActionCell(focusBaseText, false, isSelected, focusWidth)
-		nextStyled := renderActionCell(next, false, isSelected, nextWidth)
-		if isSelected {
-			if !rec.Active {
-				focusBaseText = ""
-				focusStyled = renderActionCell(focusBaseText, false, true, focusWidth)
-			}
-			if m.actionCursor == sessionActionCursorFocus {
-				if rec.Active {
-					focusStyled = renderActionCell(focusedActionMarker+"focused", true, true, focusWidth)
-				} else {
-					focusStyled = renderActionCell(focusedActionMarker+"focus", true, true, focusWidth)
-				}
-			} else {
-				nextStyled = renderActionCell(focusedActionMarker+next, true, true, nextWidth)
-			}
-			return subjectText, focusStyled, stepText, nextStyled
-		}
-		return subjectText, focusStyled, stepText, nextStyled
+		return subjectText, stepText, next
 	default:
-		return "", "", "", ""
+		return "", "", ""
 	}
 }
 
@@ -878,14 +809,6 @@ func (m *sessionsSwitchboardModel) selectCreateSubject(uid string) {
 	m.selectedBySubject[uid] = true
 }
 
-func (m *sessionsSwitchboardModel) moveActionCursorRight() {
-	m.actionCursor = sessionActionCursorNextStep
-}
-
-func (m *sessionsSwitchboardModel) moveActionCursorLeft() {
-	m.actionCursor = sessionActionCursorFocus
-}
-
 func (m sessionsSwitchboardModel) canPublishFromBrowse() bool {
 	return m.finishedSessionCount > 0 && m.inProgressSessionCount == 0
 }
@@ -895,6 +818,27 @@ func (m sessionsSwitchboardModel) publishStudy() error {
 		return m.publishFunc(m.root)
 	}
 	return cmdPublishAtRoot(m.root)
+}
+
+func (m sessionsSwitchboardModel) selectedSessionAssetPath(rec sessionRecord) (string, error) {
+	sessionDir := filepath.Join(m.root, "session", rec.Slug)
+	progress, err := inspectSessionProgress(sessionDir, m.protocol)
+	if err != nil {
+		return "", err
+	}
+	if progress.ActiveStepIdx < 0 || progress.ActiveStepIdx >= len(m.protocol.Steps) {
+		return "", fmt.Errorf("session has no current step: %s", rec.Slug)
+	}
+	stepSlug := m.protocol.Steps[progress.ActiveStepIdx].Slug
+	return filepath.Join(sessionDir, "step", stepSlug, "asset"), nil
+}
+
+func (m sessionsSwitchboardModel) openPath(path string) error {
+	if m.openPathFunc != nil {
+		return m.openPathFunc(path)
+	}
+	cmd := exec.Command("open", path)
+	return cmd.Run()
 }
 
 func readActiveSessionSlug(root string) (string, error) {

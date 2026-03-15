@@ -49,6 +49,9 @@ func (m sessionCreatePickerModel) Init() tea.Cmd { return nil }
 
 func (m sessionCreatePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		sizeCreateSessionList(&m.list, msg.Width, msg.Height)
+		return m, nil
 	case tea.KeyPressMsg:
 		startListFilteringOnTextInputWithoutInlineFilter(&m.list, msg)
 		switch msg.String() {

@@ -105,3 +105,7 @@ func newCreateSessionListModel(items []list.Item) list.Model {
 	applyFilterInputAccentStyle(&createList.FilterInput)
 	return createList
 }
+
+func sizeCreateSessionList(createList *list.Model, width, height int) {
+	createList.SetSize(max(width-2, 60), max(height-8, 8))
+}
