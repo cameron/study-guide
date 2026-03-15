@@ -267,11 +267,7 @@ func subjectCreate() error {
 }
 
 func subjectCreateWithStudyRoot(studyRoot string) error {
-	form, err := newSubjectCreateFormModel(studyRoot)
-	if err != nil {
-		return err
-	}
-	vals, canceled, err := runForm(form.title, form.fields)
+	subject, canceled, path, err := createSubjectWithStudyRoot(studyRoot)
 	if err != nil {
 		return err
 	}
@@ -279,12 +275,28 @@ func subjectCreateWithStudyRoot(studyRoot string) error {
 		fmt.Println("canceled")
 		return nil
 	}
-	path, err := saveCreatedSubject(vals)
-	if err != nil {
-		return err
-	}
+	_ = subject
 	fmt.Println("created", path)
 	return nil
+}
+
+func createSubjectWithStudyRoot(studyRoot string) (store.Subject, bool, string, error) {
+	form, err := newSubjectCreateFormModel(studyRoot)
+	if err != nil {
+		return store.Subject{}, false, "", err
+	}
+	vals, canceled, err := runForm(form.title, form.fields)
+	if err != nil {
+		return store.Subject{}, false, "", err
+	}
+	if canceled {
+		return store.Subject{}, true, "", nil
+	}
+	subject, path, err := saveCreatedSubjectRecord(vals)
+	if err != nil {
+		return store.Subject{}, false, "", err
+	}
+	return subject, false, path, nil
 }
 
 func subjectCreateRequirements(studyRoot string) (store.SubjectRequirements, error) {
@@ -2026,7 +2038,8 @@ func cmdIngestPhotos(args []string) error {
 		sessionDir := filepath.Join(root, "session", session)
 		windows, err := loadStepWindows(sessionDir, protocol)
 		if err != nil {
-			return fmt.Errorf("session %s: %w", session, err)
+			fmt.Printf("warning: skipping %s session %s: %v\n", classifySessionIngestSkip(err), session, err)
+			continue
 		}
 		plans = append(plans, sessionIngestPlan{
 			slug:       session,
@@ -2041,6 +2054,9 @@ func cmdIngestPhotos(args []string) error {
 				globalEnd = w.End
 			}
 		}
+	}
+	if len(plans) == 0 {
+		return errors.New("no ingestible sessions found")
 	}
 
 	var exported []string
@@ -2063,26 +2079,17 @@ func cmdIngestPhotos(args []string) error {
 			return err
 		}
 		dbPath, originalsRoot, hasSQLite := photosLibrarySQLiteContextFromSourceDir(sourceDir)
-		if hasSQLite {
-			fmt.Printf("scanning Photos Library assets from %s using SQLite window %s to %s\n", dbPath, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
-			exported, err = collectPhotosLibraryImageFilesBySQLite(dbPath, originalsRoot, globalStart, globalEnd, photosLibraryMTimeSkew)
-			if err != nil {
-				return err
-			}
-			if len(exported) == 0 {
-				fmt.Println("no photos found in Photos Library SQLite metadata window", dbPath)
-				return nil
-			}
-		} else {
-			fmt.Printf("scanning Photos Library files from %s (mtime envelope %s to %s)\n", sourceDir, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
-			exported, err = collectImageFilesByMTime(sourceDir, globalStart, globalEnd, photosLibraryMTimeSkew)
-			if err != nil {
-				return err
-			}
-			if len(exported) == 0 {
-				fmt.Println("no photos found in Photos Library source directory within mtime envelope", sourceDir)
-				return nil
-			}
+		if !hasSQLite {
+			return fmt.Errorf("Photos Library metadata database not found for source directory: %s", sourceDir)
+		}
+		fmt.Printf("scanning Photos Library assets from %s using SQLite window %s to %s\n", dbPath, globalStart.Format(time.RFC3339), globalEnd.Format(time.RFC3339))
+		exported, err = collectPhotosLibraryImageFilesBySQLite(dbPath, originalsRoot, globalStart, globalEnd, photosLibraryMTimeSkew)
+		if err != nil {
+			return err
+		}
+		if len(exported) == 0 {
+			fmt.Println("no photos found in Photos Library SQLite metadata window", dbPath)
+			return nil
 		}
 	}
 
@@ -2105,8 +2112,22 @@ func cmdIngestPhotos(args []string) error {
 		total.SkippedWindow += stats.SkippedWindow
 		fmt.Printf("session %s: copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", plan.slug, stats.Copied, stats.SkippedDup, stats.SkippedNoEXIF, stats.SkippedWindow)
 	}
-	fmt.Printf("ingest complete: sessions=%d copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", len(sessions), total.Copied, total.SkippedDup, total.SkippedNoEXIF, total.SkippedWindow)
+	fmt.Printf("ingest complete: sessions=%d copied=%d skipped_duplicate=%d skipped_no_exif=%d skipped_outside_windows=%d\n", len(plans), total.Copied, total.SkippedDup, total.SkippedNoEXIF, total.SkippedWindow)
 	return nil
+}
+
+func classifySessionIngestSkip(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "missing step file:"):
+		return "incomplete"
+	case msg == "last step is missing time_finished":
+		return "incomplete"
+	case strings.HasPrefix(msg, "open focus_windows interval for step "):
+		return "incomplete"
+	default:
+		return "invalid"
+	}
 }
 
 func cmdDataClean(args []string) error {
@@ -2578,7 +2599,7 @@ func defaultPhotosLibrarySourceDir(home string) (string, error) {
 			if resolved, ok := resolvePhotosLibraryAssetSubdir(configured); ok {
 				return resolved, nil
 			}
-			return configured, nil
+			return "", fmt.Errorf("configured photos_library_path is not a Photos Library package with originals/: %s", configured)
 		}
 		if err != nil && os.IsNotExist(err) {
 			return "", fmt.Errorf("configured photos_library_path not found: %s", configured)
@@ -2678,7 +2699,10 @@ func loadStepWindows(sessionDir string, protocol store.Protocol) ([]stepWindow, 
 		stepPath := filepath.Join(sessionDir, "step", st.Slug, "step.sg.md")
 		fm, _, err := util.ReadFrontmatterFile(stepPath)
 		if err != nil {
-			return nil, fmt.Errorf("missing step file: %s", stepPath)
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("missing step file: %s", stepPath)
+			}
+			return nil, fmt.Errorf("step file read error: %s: %w", stepPath, err)
 		}
 		started := asString(fm["time_started"])
 		if strings.TrimSpace(started) == "" {

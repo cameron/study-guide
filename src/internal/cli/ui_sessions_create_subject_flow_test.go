@@ -13,7 +13,7 @@ import (
 	"study-guide/src/internal/util"
 )
 
-func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t *testing.T) {
+func TestSessionsUI_CreateSubjectFlowCreatesSubjectAndSessionAndReturnsToBrowse(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -101,19 +101,19 @@ func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t
 		m = updated.(sessionsSwitchboardModel)
 	}
 
-	if m.view != sessionsViewCreate {
-		t.Fatalf("expected completed subject form to return to create mode, got %v", m.view)
+	if m.view != sessionsViewBrowse {
+		t.Fatalf("expected completed subject form to return to browse mode, got %v", m.view)
 	}
-	if got := selectedSubjectNames(m.selectedSubjects()); got != "Alpha Subject" {
-		t.Fatalf("expected prior selection preserved after returning from subject form, got %q", got)
+	if got := selectedSubjectNames(m.selectedSubjects()); got != "Beta Subject" {
+		t.Fatalf("expected newly created subject to be selected for the created session, got %q", got)
 	}
 
 	view := stripANSI(m.View().Content)
-	if !strings.Contains(view, "Create Session") {
-		t.Fatalf("expected create-mode header after returning from subject form, got:\n%s", view)
+	if !strings.Contains(view, "Sessions [enter] next step") {
+		t.Fatalf("expected browse header after returning from subject form, got:\n%s", view)
 	}
-	if strings.Contains(view, "Enter to continue. Tab/Shift+Tab to move. Esc to cancel.") {
-		t.Fatalf("expected subject form instructions cleared after returning to create mode, got:\n%s", view)
+	if !strings.Contains(view, "Beta Subject") {
+		t.Fatalf("expected browse view to show created session subject, got:\n%s", view)
 	}
 
 	allSubjects, err := store.ListSubjects()
@@ -124,12 +124,22 @@ func TestSessionsUI_CreateSubjectFlowReturnsToCreateModeWithPreservedSelection(t
 		t.Fatalf("expected saved subject list to include new subject, got %q", got)
 	}
 
-	items := m.list.Items()
-	if len(items) != 4 {
-		t.Fatalf("expected Alpha, Beta, New subject, and Create entries after refresh, got %d", len(items))
+	sessionDirs, err := os.ReadDir(filepath.Join(studyRoot, "session"))
+	if err != nil {
+		t.Fatalf("read session dir failed: %v", err)
 	}
-	if got := listItemTitles(items[:2]); got != "  Beta Subject ("+shortSubjectID(allSubjects[1].UUID)+"),  Alpha Subject ("+shortSubjectID(allSubjects[0].UUID)+")" {
-		t.Fatalf("expected most-recent-first picker order after create, got %q", got)
+	if len(sessionDirs) != 1 {
+		t.Fatalf("expected one created session, got %d", len(sessionDirs))
+	}
+	sessionFM, sessionBody, err := util.ReadFrontmatterFile(filepath.Join(studyRoot, "session", sessionDirs[0].Name(), "session.sg.md"))
+	if err != nil {
+		t.Fatalf("read created session failed: %v", err)
+	}
+	if len(sessionFM) != 0 {
+		t.Fatalf("expected created session frontmatter to remain empty, got %#v", sessionFM)
+	}
+	if !strings.Contains(sessionBody, "Beta Subject ("+allSubjects[1].UUID+")") {
+		t.Fatalf("expected created session body to reference new subject, got:\n%s", sessionBody)
 	}
 }
 

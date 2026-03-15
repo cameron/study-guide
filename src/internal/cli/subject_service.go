@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"study-guide/src/internal/store"
+	"study-guide/src/internal/util"
 )
 
 func subjectFromCreateValues(vals map[string]string) store.Subject {
@@ -34,8 +35,22 @@ func subjectFromCreateValues(vals map[string]string) store.Subject {
 	}
 }
 
+func saveCreatedSubjectRecord(vals map[string]string) (store.Subject, string, error) {
+	subject := subjectFromCreateValues(vals)
+	path, err := store.SaveSubject(subject)
+	if err != nil {
+		return store.Subject{}, "", err
+	}
+	fm, body, err := util.ReadFrontmatterFile(path)
+	if err != nil {
+		return store.Subject{}, "", err
+	}
+	return store.SubjectFromFM(path, fm, body), path, nil
+}
+
 func saveCreatedSubject(vals map[string]string) (string, error) {
-	return store.SaveSubject(subjectFromCreateValues(vals))
+	_, path, err := saveCreatedSubjectRecord(vals)
+	return path, err
 }
 
 func formValues(m formModel) map[string]string {

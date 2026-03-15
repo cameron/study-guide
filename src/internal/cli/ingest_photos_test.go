@@ -171,6 +171,33 @@ func TestLoadStepWindows_RequiresFocusWindows(t *testing.T) {
 	}
 }
 
+func TestLoadStepWindows_ReportsMalformedExistingStepFile(t *testing.T) {
+	tmp := t.TempDir()
+	sessionDir := filepath.Join(tmp, "session", "s1")
+	protocol := store.Protocol{Steps: []store.ProtocolStep{{Name: "A", Slug: "a"}}}
+	stepPath := filepath.Join(sessionDir, "step", "a", "step.sg.md")
+	if err := os.MkdirAll(filepath.Dir(stepPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+	if err := os.WriteFile(stepPath, []byte("---\ntime_started: 10:00:00 01-01-2026\n    - time_finished: 10:01:00 01-01-2026\n      time_started: 10:00:00 01-01-2026\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	_, err := loadStepWindows(sessionDir, protocol)
+	if err == nil {
+		t.Fatalf("expected error for malformed frontmatter")
+	}
+	if !strings.Contains(err.Error(), "step file read error") {
+		t.Fatalf("expected step file read error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), stepPath) {
+		t.Fatalf("expected concrete step path in error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "missing step file") {
+		t.Fatalf("expected non-missing-file error, got: %v", err)
+	}
+}
+
 func TestLoadStepWindows_RequiresTimeFields(t *testing.T) {
 	t.Run("missing started", func(t *testing.T) {
 		tmp := t.TempDir()
@@ -403,6 +430,150 @@ func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 	assertAssetCount(t, studyRoot, sessionA, 3)
 }
 
+func TestCmdIngestPhotos_WarnsAndContinuesPastIncompleteSessions(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "incomplete-sessions"), studyRoot)
+
+	assetsDir := filepath.Join(tmp, "assets")
+	mustWriteFile(t, filepath.Join(assetsDir, "alpha-pre.jpg"), "alpha-pre")
+	mustWriteFile(t, filepath.Join(assetsDir, "beta-post.jpg"), "beta-post")
+
+	assetTimes := map[string]string{
+		"alpha-pre.jpg": "10:15:00 14-03-2026",
+		"beta-post.jpg": "18:30:00 14-03-2026",
+	}
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		raw, ok := assetTimes[filepath.Base(path)]
+		if !ok {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, raw), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	out := captureStdout(t, func() {
+		if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+			t.Fatalf("cmdIngestPhotos error: %v", err)
+		}
+	})
+	out = strings.ReplaceAll(out, "\r\n", "\n")
+
+	for _, slug := range []string{
+		"14-03-2026-charlie",
+		"14-03-2026-delta",
+		"14-03-2026-echo",
+		"14-03-2026-foxtrot",
+	} {
+		if !strings.Contains(out, "warning: skipping incomplete session "+slug+":") {
+			t.Fatalf("expected warning for incomplete session %q, got:\n%s", slug, out)
+		}
+	}
+	for _, want := range []string{
+		"session 14-03-2026-alpha: copied=1",
+		"session 14-03-2026-beta: copied=1",
+		"ingest complete: sessions=2 copied=2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+
+	assertStepAssetCount(t, studyRoot, "14-03-2026-alpha", "01-preworkshop", 1)
+	assertStepAssetCount(t, studyRoot, "14-03-2026-alpha", "02-postworkshop", 0)
+	assertStepAssetCount(t, studyRoot, "14-03-2026-beta", "01-preworkshop", 0)
+	assertStepAssetCount(t, studyRoot, "14-03-2026-beta", "02-postworkshop", 1)
+	for _, slug := range []string{
+		"14-03-2026-charlie",
+		"14-03-2026-delta",
+		"14-03-2026-echo",
+		"14-03-2026-foxtrot",
+	} {
+		assertAssetCount(t, studyRoot, slug, 0)
+	}
+}
+
+func TestCmdIngestPhotos_WarnsAndContinuesPastInvalidSessions(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-complete"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
+	mustCopyDir(
+		t,
+		filepath.Join(studyRoot, "session", "18-02-2026-boehmer"),
+		filepath.Join(studyRoot, "session", "18-02-2026-boehmer-copy"),
+	)
+
+	badStep := filepath.Join(studyRoot, "session", "18-02-2026-boehmer", "step", "01-first-exposure", "step.sg.md")
+	mustWriteFile(t, badStep, "---\ntime_started: nope\nfocus_windows:\n  - time_started: 10:00:00 01-01-2026\n    time_finished: 10:10:00 01-01-2026\n---\n")
+
+	assetsDir, err := filepath.Abs(filepath.Join("..", "..", "..", "fixtures", "study-complete-assets"))
+	if err != nil {
+		t.Fatalf("Abs assets dir error: %v", err)
+	}
+	assetTimes := map[string]string{
+		"20260218-232533_583457f3.heic": "23:25:33 18-02-2026",
+		"20260218-234841_f428ad30.heic": "23:48:41 18-02-2026",
+		"20260218-234906_df3cf56d.heic": "23:49:06 18-02-2026",
+		"20260218-234913_b0946212.heic": "23:49:13 18-02-2026",
+		"20260218-234933_d724160a.heic": "23:49:33 18-02-2026",
+		"20260219-000224_1decaf8d.heic": "00:02:24 19-02-2026",
+		"20260219-000319_c49dc602.heic": "00:03:19 19-02-2026",
+		"20260222-124813_65e44e5a.png":  "12:48:13 22-02-2026",
+		"20260302-225319_83be6e9a.png":  "22:53:19 02-03-2026",
+	}
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		raw, ok := assetTimes[filepath.Base(path)]
+		if !ok {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, raw), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	out := captureStdout(t, func() {
+		if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+			t.Fatalf("cmdIngestPhotos error: %v", err)
+		}
+	})
+	out = strings.ReplaceAll(out, "\r\n", "\n")
+
+	if !strings.Contains(out, "warning: skipping invalid session 18-02-2026-boehmer: invalid step time_started:") {
+		t.Fatalf("expected invalid-session warning, got:\n%s", out)
+	}
+	for _, want := range []string{
+		"session 18-02-2026-boehmer-copy: copied=7",
+		"ingest complete: sessions=1 copied=7",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+
+	assertAssetCount(t, studyRoot, "18-02-2026-boehmer", 0)
+	assertAssetCount(t, studyRoot, "18-02-2026-boehmer-copy", 7)
+}
+
 func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")
@@ -608,7 +779,7 @@ func TestCmdIngestPhotos_ParsesExifOncePerSourceAcrossSessions(t *testing.T) {
 	}
 }
 
-func TestCmdIngestPhotos_DefaultMode_UsesConfiguredPhotosLibraryPath(t *testing.T) {
+func TestCmdIngestPhotos_DefaultMode_FailsForPlainConfiguredDirectory(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("default ingest mode is macOS-only")
 	}
@@ -697,10 +868,14 @@ func TestCmdIngestPhotos_DefaultMode_UsesConfiguredPhotosLibraryPath(t *testing.
 	}
 	defer func() { _ = os.Chdir(oldwd) }()
 
-	if err := cmdIngestPhotos(nil); err != nil {
-		t.Fatalf("cmdIngestPhotos default mode error: %v", err)
+	err = cmdIngestPhotos(nil)
+	if err == nil {
+		t.Fatal("expected cmdIngestPhotos to fail for plain configured directory")
 	}
-	assertAssetCount(t, studyRoot, sessionA, 3)
+	if !strings.Contains(err.Error(), "Photos Library package") {
+		t.Fatalf("expected Photos Library package error, got: %v", err)
+	}
+	assertAssetCount(t, studyRoot, sessionA, 0)
 }
 
 func TestCollectPhotosLibraryImageFilesBySQLite_MapsRowsToOriginalPaths(t *testing.T) {
@@ -839,7 +1014,7 @@ func TestDefaultPhotosLibrarySourceDir_FailsLoudlyWhenExpectedPathsMissing(t *te
 	}
 }
 
-func TestDefaultPhotosLibrarySourceDir_UsesConfiguredPath(t *testing.T) {
+func TestDefaultPhotosLibrarySourceDir_FailsForConfiguredPlainDirectory(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".study-guide", "config")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -853,12 +1028,12 @@ func TestDefaultPhotosLibrarySourceDir_UsesConfiguredPath(t *testing.T) {
 		t.Fatalf("MkdirAll configured path error: %v", err)
 	}
 
-	got, err := defaultPhotosLibrarySourceDir(home)
-	if err != nil {
-		t.Fatalf("defaultPhotosLibrarySourceDir returned error: %v", err)
+	_, err := defaultPhotosLibrarySourceDir(home)
+	if err == nil {
+		t.Fatal("expected plain configured directory to fail")
 	}
-	if got != want {
-		t.Fatalf("unexpected configured source dir: got=%q want=%q", got, want)
+	if !strings.Contains(err.Error(), "Photos Library package") {
+		t.Fatalf("expected Photos Library package error, got: %v", err)
 	}
 }
 
@@ -915,10 +1090,10 @@ func TestDefaultPhotosLibrarySourceDir_UsesLegacySingularConfigKey(t *testing.T)
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll config dir error: %v", err)
 	}
-	if err := os.WriteFile(configPath, []byte("photo_library_path: ~/ctx/photo\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte("photo_library_path: ~/ctx/photo/Photos Library.photoslibrary\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile config error: %v", err)
 	}
-	want := filepath.Join(home, "ctx", "photo")
+	want := filepath.Join(home, "ctx", "photo", "Photos Library.photoslibrary", "originals")
 	if err := os.MkdirAll(want, 0o755); err != nil {
 		t.Fatalf("MkdirAll configured path error: %v", err)
 	}
@@ -938,11 +1113,11 @@ func TestDefaultPhotosLibrarySourceDir_WarnsOnUnrecognizedConfigKeys(t *testing.
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll config dir error: %v", err)
 	}
-	want := filepath.Join(home, "ctx", "photo")
+	want := filepath.Join(home, "ctx", "photo", "Photos Library.photoslibrary", "originals")
 	if err := os.MkdirAll(want, 0o755); err != nil {
 		t.Fatalf("MkdirAll configured path error: %v", err)
 	}
-	raw := "photos_library_path: ~/ctx/photo\nunexpected_key: true\n"
+	raw := "photos_library_path: ~/ctx/photo/Photos Library.photoslibrary\nunexpected_key: true\n"
 	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
 		t.Fatalf("WriteFile config error: %v", err)
 	}

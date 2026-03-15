@@ -157,11 +157,15 @@ func runSessionCreatePicker(studyRoot string) ([]store.Subject, bool, error) {
 			return nil, true, nil
 		}
 		if out.requestCreateSubject {
-			if err := subjectCreateWithStudyRoot(studyRoot); err != nil {
+			created, canceled, _, err := createSubjectWithStudyRoot(studyRoot)
+			if err != nil {
 				return nil, false, err
 			}
-			selectedBySubject = out.selectedBySubject
-			continue
+			if canceled {
+				selectedBySubject = out.selectedBySubject
+				continue
+			}
+			return []store.Subject{created}, false, nil
 		}
 		if !out.done {
 			return nil, false, fmt.Errorf("no selection")

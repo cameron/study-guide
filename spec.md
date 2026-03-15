@@ -62,6 +62,7 @@ Notes:
 - v1 has exactly one protocol: `<study-root>/protocol.sg.md`
 - sessions are not nested under protocol
 - `fixtures/study-eg/` is the canonical sample tree name (not `sample-eg/`)
+- shipped fixtures used by tests must use anonymized study and subject names
 
 ## Naming, IDs, and Time Format
 
@@ -254,7 +255,7 @@ Delete one subject file from global subject store.
 ### `sg session`
 Interactive session flow:
 1. Select subject(s) from global store using the same `Create Session` picker UI used by `sg sessions` create mode.
-   That shared picker includes `(+) New subject` and `-> Create Session` actions.
+   That shared picker includes `(+) New subject` and `-> Create Session` actions; choosing `(+) New subject` completes subject creation and then immediately creates the session with that new subject.
 2. Create `session/<session-slug>/session.sg.md`.
 3. Parse `protocol.sg.md` steps.
 4. On step start: create step folder + `step.sg.md` and write `time_started`.
@@ -322,7 +323,7 @@ Behavior:
 28. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
 29. `p` triggers publish from browse view (keyboard action; not a table row).
 30. When `sg` runs with no args in a directory missing `study.sg.md`, the init UI must be visually cleared before transitioning into `sg sessions`.
-31. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then return to the picker without stale rows leaking between the two screens.
+31. Choosing `(+) New subject` from the shared create-session picker (used by both `sg session` and `sg sessions`) must transition into an isolated subject-create screen within that same long-lived interactive program, then immediately create a session with that new subject and return to browse view without stale rows leaking between the two screens.
 32. In the shared create-session picker (used by both `sg session` and `sg sessions`), typing immediately starts fuzzy autocomplete filtering over subject names (without requiring `/`).
 33. In create mode of that same shared picker, `shift+enter` is a keyboard shortcut for the current create-confirmation row.
 34. In create mode of that same shared picker, the subject filter/search input is always visible before typing.
@@ -542,12 +543,12 @@ All criteria below are pass/fail requirements for v1.
 - default mode reads assets from Apple Photos on macOS.
 - `--assets-dir <path>` mode reads image files recursively from local filesystem (supported on all OSes).
 3. `--assets-dir` is optional.
-4. Default mode scans expected Photos Library package subdirectories on disk and fails loudly with the checked paths when none are found.
+4. Default mode requires an Apple Photos library package on disk and fails loudly with the checked paths when none are found.
    The default source path is configurable via `~/.study-guide/config` key `photos_library_path`.
    If configured path points at `Photos Library.photoslibrary` package root, ingestion resolves to `originals/` (or `Masters/` fallback) for file copy targets.
-   When `database/Photos.sqlite` is available, candidate assets are selected via SQL metadata query (not filesystem `mtime` walk), then resolved to `originals/<ZDIRECTORY>/<ZFILENAME>`.
+   Candidate assets are selected via SQL metadata query from `database/Photos.sqlite`, then resolved to `originals/<ZDIRECTORY>/<ZFILENAME>`.
    That SQL selection deduplicates duplicate/edited metadata rows for the same logical master asset (using Photos master linkage) by keeping only the most recent metadata row.
-   If configured source is not a Photos Library package (no `database/Photos.sqlite`), ingestion falls back to filesystem scanning.
+   If configured source is not a Photos Library package with `database/Photos.sqlite`, default-mode ingestion fails; recursive filesystem ingestion is available only via `--assets-dir`.
    Unrecognized keys in `~/.study-guide/config` are ignored but emitted as warnings.
 5. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
 6. In default mode with Photos Library package input, candidate files are discovered from SQLite metadata time fields (windowed by session step envelopes) before EXIF reads.
@@ -559,12 +560,14 @@ All criteria below are pass/fail requirements for v1.
 8. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
 9. Duplicate files are skipped based on content identity within each session.
 10. Re-running ingestion on unchanged inputs produces no duplicate copies (idempotent behavior).
-10. Ingestion refuses to run when required timing fields for matching are missing in any targeted session.
-11. Output includes per-session ingest counts and aggregate totals.
-12. `sg data ingest --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
+10. If a session is incomplete for ingest matching (for example a later protocol step file has not been created yet, or the final step has not been finished yet), ingestion warns that it skipped an incomplete session and continues processing every other session with valid timing windows.
+11. If a session is invalid for ingest matching (for example malformed frontmatter/YAML or nonsensical timestamps/window bounds), ingestion warns that it skipped an invalid session and continues processing every other session with valid timing windows.
+12. If a required step file exists but cannot be parsed, the invalid-session warning reports a step-file read error for that concrete path instead of claiming the file is missing.
+13. Output includes per-session ingest counts and aggregate totals.
+14. `sg data ingest --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
     The canonical fixture directory for that asset set is `fixtures/study-complete-assets/`.
-13. `sg data ls` outputs one sorted row per ingested asset (`SESSION | STEP | FILE`) and an aggregate asset total.
-14. The repository concurrent-ingest fixture keeps study state and source media separate:
+15. `sg data ls` outputs one sorted row per ingested asset (`SESSION | STEP | FILE`) and an aggregate asset total.
+16. The repository concurrent-ingest fixture keeps study state and source media separate:
 - study fixture: `fixtures/four-concurrently/` (session step `asset/` dirs empty before ingest)
 - source media fixture: `fixtures/four-concurrently-data/`
 - each source photo embeds metadata describing expected destination (`subject`, `step`) so tests can assert ingestion placement by metadata, not only by filename.

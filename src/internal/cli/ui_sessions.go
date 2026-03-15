@@ -774,7 +774,7 @@ func (m sessionsSwitchboardModel) updateCreateSubjectForm(msg tea.Msg) (tea.Mode
 		m.message = ""
 		return m, nil
 	}
-	path, err := saveCreatedSubject(formValues(m.createSubjectForm))
+	created, path, err := saveCreatedSubjectRecord(formValues(m.createSubjectForm))
 	if err != nil {
 		m.refreshCreateList()
 		m.message = "create subject failed: " + err.Error()
@@ -787,9 +787,10 @@ func (m sessionsSwitchboardModel) updateCreateSubjectForm(msg tea.Msg) (tea.Mode
 		return m, nil
 	}
 	m.subjects = subs
+	m.selectCreateSubject(created.UUID)
 	m.refreshCreateList()
 	m.message = "created " + path
-	return m, nil
+	return m.handleCreateShortcut()
 }
 
 func (m *sessionsSwitchboardModel) selectedSubjects() []store.Subject {
