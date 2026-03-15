@@ -270,7 +270,7 @@ Interactive session switchboard for running multiple sessions in parallel from o
 Behavior:
 1. Shows only incomplete sessions.
 2. Provides an autocomplete query over subject name and session slug.
-3. Browse table columns are ordered: `SLUG | SUBJECT | FOCUSED | STEP | NEXT`.
+3. Browse table columns are ordered: `SUBJECT | FOCUSED | STEP | NEXT`.
 4. `FOCUSED` and `NEXT` columns are actionable cells.
 5. The selected row (default top row) always has an active action cursor.
 6. Arrow key behavior:
@@ -286,7 +286,7 @@ Behavior:
 8. Press `Esc` to quit browse view.
 9. Includes an action to create a new session without leaving the switchboard.
 10. The session list view uses compact single-line rows (no blank description line).
-   Unarmed row format includes step progress: `<slug> | <subject> | <X>/<Y> <current step>`.
+   Unarmed row format includes step progress: `<subject> | <X>/<Y> <current step>`.
    The browse view is implemented with a table component (column headers visible).
    Step progress is rendered as `[X/Y]`.
    `X` is the count of protocol steps progressed so far (implicitly-finished earlier steps count, plus the currently active step when present).

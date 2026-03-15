@@ -291,7 +291,7 @@ func TestRenderEntryRow_ProgressUsesCompletedStepsWhenNoActiveStep(t *testing.T)
 	}
 
 	model := sessionsSwitchboardModel{protocol: protocol}
-	_, _, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
+	_, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
 	if !strings.HasPrefix(stepText, "[2/3]") {
 		t.Fatalf("expected [2/3] step progress, got %q", stepText)
 	}
@@ -329,7 +329,7 @@ func TestLoadSessionRecords_ShowsLastProgressedStepWhenNoActiveStep(t *testing.T
 		t.Fatalf("expected current step to remain on last progressed step, got %q", records[0].CurrentStep)
 	}
 	model := sessionsSwitchboardModel{protocol: protocol}
-	_, _, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
+	_, _, stepText, _ := model.renderEntryRow(browseEntry{kind: browseEntrySession, record: records[0]})
 	if !strings.Contains(stepText, "Third Step") {
 		t.Fatalf("expected step text to include Third Step, got %q", stepText)
 	}

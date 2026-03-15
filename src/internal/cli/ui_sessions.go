@@ -242,7 +242,6 @@ func runSessionsSwitchboard(root string, protocol store.Protocol) error {
 func newSessionsSwitchboardModel(root string, protocol store.Protocol) (sessionsSwitchboardModel, error) {
 	tbl := table.New(
 		table.WithColumns([]table.Column{
-			{Title: "SLUG", Width: 24},
 			{Title: "SUBJECT", Width: 30},
 			{Title: "FOCUSED", Width: 24},
 			{Title: "STEP", Width: 24},
@@ -665,8 +664,8 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 		selectedSlug = entries[0].record.Slug
 	}
 	for i, e := range entries {
-		slug, subject, active, step, nextStep := m.renderEntryRow(e)
-		rows = append(rows, table.Row{slug, subject, active, step, nextStep})
+		subject, active, step, nextStep := m.renderEntryRow(e)
+		rows = append(rows, table.Row{subject, active, step, nextStep})
 		if e.kind == browseEntrySession && e.record.Slug == selectedSlug {
 			targetCursor = i
 		}
@@ -684,11 +683,11 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 	total := max(m.width, 60)
 	// Fit columns to viewport while preserving readability.
 	const (
-		overhead = 12
+		overhead = 10
 		nextMin  = 16
 	)
-	pref := []int{35, 35, 24, 48}
-	mins := []int{14, 14, 8, 20}
+	pref := []int{35, 24, 48}
+	mins := []int{14, 8, 20}
 	sumPref := 0
 	for _, w := range pref {
 		sumPref += w
@@ -717,16 +716,14 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 			}
 		}
 	}
-	slugW := widths[0]
-	subjectW := widths[1]
-	focusW := widths[2]
-	stepW := widths[3]
-	nextW := total - overhead - slugW - subjectW - focusW - stepW
+	subjectW := widths[0]
+	focusW := widths[1]
+	stepW := widths[2]
+	nextW := total - overhead - subjectW - focusW - stepW
 	if nextW < nextMin {
 		nextW = nextMin
 	}
 	m.table.SetColumns([]table.Column{
-		{Title: "SLUG", Width: slugW},
 		{Title: "SUBJECT", Width: subjectW},
 		{Title: "FOCUSED", Width: focusW},
 		{Title: "STEP", Width: stepW},
@@ -735,10 +732,10 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 	m.table.SetWidth(total)
 }
 
-func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string, string) {
+func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string, string) {
 	switch e.kind {
 	case browseEntryEmpty:
-		return "no open sessions", "", "", "", ""
+		return "no open sessions", "", "", ""
 	case browseEntrySession:
 		rec := e.record
 		subjectText := strings.Join(rec.SubjectNames, ", ")
@@ -780,12 +777,12 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		focusWidth := 1
 		nextWidth := 1
 		cols := m.table.Columns()
-		if len(cols) >= 5 {
-			if cols[2].Width > 0 {
-				focusWidth = cols[2].Width
+		if len(cols) >= 4 {
+			if cols[1].Width > 0 {
+				focusWidth = cols[1].Width
 			}
-			if cols[4].Width > 0 {
-				nextWidth = cols[4].Width
+			if cols[3].Width > 0 {
+				nextWidth = cols[3].Width
 			}
 		}
 		isSelected := rec.Slug == selectedSlug
@@ -809,11 +806,11 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 			} else {
 				nextStyled = renderActionCell(focusedActionMarker+next, true, true, nextWidth)
 			}
-			return rec.Slug, subjectText, focusStyled, stepText, nextStyled
+			return subjectText, focusStyled, stepText, nextStyled
 		}
-		return rec.Slug, subjectText, focusStyled, stepText, nextStyled
+		return subjectText, focusStyled, stepText, nextStyled
 	default:
-		return "", "", "", "", ""
+		return "", "", "", ""
 	}
 }
 
