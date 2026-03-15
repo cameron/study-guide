@@ -593,6 +593,8 @@ All criteria below are pass/fail requirements for v1.
 - protocol summary + step list
 - sessions in chronological order
 - per-session subject list, step timeline, and associated images
+  - a per-session comparison page with a minimal header showing the subject name and session start date, plus one vertically scrollable image column per protocol step labeled with the step name
+  - HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
 4. `sg publish` runs status checks before rendering outputs.
 5. If required sections/steps/fields are missing, `study.sg.md` is updated to `status: WIP`.
 6. If incomplete, both HTML and PDF outputs visibly indicate `WIP`.

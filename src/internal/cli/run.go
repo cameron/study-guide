@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -533,41 +534,9 @@ func cmdSession(args []string) error {
 		return err
 	}
 	var prevStepPath string
-		for i, step := range protocol.Steps {
-			if prevStepPath != "" {
-				if _, canceled, err := runSelect("Advance to next step", []string{"Continue", "Cancel"}); err != nil {
-					return err
-				} else if canceled {
-					return nil
-				}
-				now := util.NowTimestamp()
-				if err := setFrontmatterField(prevStepPath, "time_finished", now); err != nil {
-					return err
-				}
-				if err := closeOpenFocusWindow(prevStepPath, now); err != nil {
-					return err
-				}
-			}
-			stepDir := filepath.Join(sessionDir, "step", step.Slug)
-			if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
-				return err
-			}
-			stepPath := filepath.Join(stepDir, "step.sg.md")
-			now := util.NowTimestamp()
-			fm := map[string]any{
-				"time_started": now,
-				"focus_windows": []map[string]any{
-					{"time_started": now},
-				},
-			}
-			if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
-				return err
-			}
-		prevStepPath = stepPath
-		fmt.Printf("started step %d/%d: %s\n", i+1, len(protocol.Steps), step.Name)
-	}
+	for i, step := range protocol.Steps {
 		if prevStepPath != "" {
-			if _, canceled, err := runSelect("Finish session?", []string{"Finish", "Cancel"}); err != nil {
+			if _, canceled, err := runSelect("Advance to next step", []string{"Continue", "Cancel"}); err != nil {
 				return err
 			} else if canceled {
 				return nil
@@ -580,6 +549,38 @@ func cmdSession(args []string) error {
 				return err
 			}
 		}
+		stepDir := filepath.Join(sessionDir, "step", step.Slug)
+		if err := util.EnsureDir(filepath.Join(stepDir, "asset")); err != nil {
+			return err
+		}
+		stepPath := filepath.Join(stepDir, "step.sg.md")
+		now := util.NowTimestamp()
+		fm := map[string]any{
+			"time_started": now,
+			"focus_windows": []map[string]any{
+				{"time_started": now},
+			},
+		}
+		if err := util.WriteFrontmatterFile(stepPath, fm, ""); err != nil {
+			return err
+		}
+		prevStepPath = stepPath
+		fmt.Printf("started step %d/%d: %s\n", i+1, len(protocol.Steps), step.Name)
+	}
+	if prevStepPath != "" {
+		if _, canceled, err := runSelect("Finish session?", []string{"Finish", "Cancel"}); err != nil {
+			return err
+		} else if canceled {
+			return nil
+		}
+		now := util.NowTimestamp()
+		if err := setFrontmatterField(prevStepPath, "time_finished", now); err != nil {
+			return err
+		}
+		if err := closeOpenFocusWindow(prevStepPath, now); err != nil {
+			return err
+		}
+	}
 	fmt.Println("session complete:", sessionDir)
 	return nil
 }
@@ -664,15 +665,15 @@ func cmdDataLs() error {
 		if len(parts) < 5 {
 			return nil
 		}
-			if parts[1] != "step" || parts[3] != "asset" {
-				return nil
-			}
-			if strings.EqualFold(filepath.Base(path), ".DS_Store") {
-				return nil
-			}
-			rows = append(rows, dataAssetRow{
-				Session: parts[0],
-				Step:    parts[2],
+		if parts[1] != "step" || parts[3] != "asset" {
+			return nil
+		}
+		if strings.EqualFold(filepath.Base(path), ".DS_Store") {
+			return nil
+		}
+		rows = append(rows, dataAssetRow{
+			Session: parts[0],
+			Step:    parts[2],
 			File:    strings.Join(parts[4:], "/"),
 		})
 		return nil
@@ -1187,12 +1188,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 		if err := startSessionStep(sessionDir, protocol.Steps[target], now); err != nil {
 			return sessionAdvanceResult{}, err
 		}
-			if isFocused {
-				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
-					return sessionAdvanceResult{}, err
-				}
+		if isFocused {
+			if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+				return sessionAdvanceResult{}, err
 			}
-			return sessionAdvanceResult{State: "started", StepSlug: protocol.Steps[target].Slug}, nil
+		}
+		return sessionAdvanceResult{State: "started", StepSlug: protocol.Steps[target].Slug}, nil
 	case "advance":
 		if progress.ActiveStepIdx < 0 || progress.ActiveStepIdx >= len(protocol.Steps)-1 {
 			return sessionAdvanceResult{}, errors.New("cannot advance: no active step")
@@ -1205,12 +1206,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 		if err := startSessionStep(sessionDir, next, now); err != nil {
 			return sessionAdvanceResult{}, err
 		}
-			if isFocused {
-				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
-					return sessionAdvanceResult{}, err
-				}
+		if isFocused {
+			if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+				return sessionAdvanceResult{}, err
 			}
-			return sessionAdvanceResult{State: "advanced", StepSlug: next.Slug}, nil
+		}
+		return sessionAdvanceResult{State: "advanced", StepSlug: next.Slug}, nil
 	case "finish":
 		if progress.ActiveStepIdx >= 0 {
 			active := protocol.Steps[progress.ActiveStepIdx]
@@ -1219,12 +1220,12 @@ func advanceSessionOnce(root, sessionSlug string, protocol store.Protocol) (sess
 			}
 		}
 		lastStep := protocol.Steps[len(protocol.Steps)-1]
-			if isFocused {
-				if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
-					return sessionAdvanceResult{}, err
-				}
+		if isFocused {
+			if err := syncFocusedSessionWindows(root, sessionSlug, protocol, now); err != nil {
+				return sessionAdvanceResult{}, err
 			}
-			return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
+		}
+		return sessionAdvanceResult{State: "finished", StepSlug: lastStep.Slug}, nil
 	default:
 		return sessionAdvanceResult{}, fmt.Errorf("session cannot transition from current state")
 	}
@@ -1687,6 +1688,9 @@ func cmdPublishAtRoot(root string) error {
 	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte(html), 0o644); err != nil {
 		return err
 	}
+	if err := writePublishSessionPages(root, title, sessions, incomplete); err != nil {
+		return err
+	}
 
 	pdfBody := renderPublishText(title, studyFM, studyBody, protocol, sessions)
 	if err := writePDF(filepath.Join(outDir, "study.pdf"), title, pdfBody, incomplete); err != nil {
@@ -1695,6 +1699,25 @@ func cmdPublishAtRoot(root string) error {
 	fmt.Printf("published to %s\n", outDir)
 	return nil
 }
+
+func writePublishSessionPages(root, title string, sessions []publishSession, incomplete bool) error {
+	for _, s := range sessions {
+		sessionDir := filepath.Join(root, "publish", "site", "session", s.Slug)
+		if err := util.EnsureDir(sessionDir); err != nil {
+			return err
+		}
+		html, err := renderPublishSessionHTML(sessionDir, title, s, incomplete)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(sessionDir, "index.html"), []byte(html), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var publishImagePreviewFn = publishImagePreview
 
 type publishStep struct {
 	Name      string
@@ -1714,31 +1737,29 @@ type publishSession struct {
 }
 
 func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID map[string]store.Subject) ([]publishSession, error) {
-	sessionRoot := filepath.Join(root, "session")
-	entries, err := os.ReadDir(sessionRoot)
-	if err != nil && !os.IsNotExist(err) {
+	slugList, err := listSessionSlugs(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	sessions := make([]publishSession, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		slug := e.Name()
-		sdir := filepath.Join(sessionRoot, slug)
+	sessions := make([]publishSession, 0, len(slugList))
+	for _, slug := range slugList {
+		sdir := filepath.Join(root, "session", slug)
 		_, body, err := util.ReadFrontmatterFile(filepath.Join(sdir, "session.sg.md"))
 		if err != nil {
 			continue
 		}
 		refs := parseSessionSubjects(body)
 		ids := make([]string, 0, len(refs))
-		names := make([]string, 0, len(ids))
+		names := make([]string, 0, len(refs))
 		for _, ref := range refs {
 			if strings.TrimSpace(ref.ID) != "" {
 				ids = append(ids, ref.ID)
 			}
 			name := ref.Name
-			if s, ok := subjectByID[ref.ID]; ok {
+			if s, ok := subjectByID[ref.ID]; ok && strings.TrimSpace(s.Name) != "" {
 				name = s.Name
 			}
 			if strings.TrimSpace(name) != "" {
@@ -1770,35 +1791,13 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 				ImageRefs: imgRefs,
 			})
 		}
-			started := ""
-			finished := ""
-			for _, step := range steps {
-				if strings.TrimSpace(step.Started) != "" {
-					if started == "" {
-						started = step.Started
-					} else if st, errSt := util.ParseTimestamp(step.Started); errSt == nil {
-						if cur, errCur := util.ParseTimestamp(started); errCur == nil && st.Before(cur) {
-							started = step.Started
-						}
-					}
-				}
-				if strings.TrimSpace(step.Finished) != "" {
-					if finished == "" {
-						finished = step.Finished
-					} else if st, errSt := util.ParseTimestamp(step.Finished); errSt == nil {
-						if cur, errCur := util.ParseTimestamp(finished); errCur == nil && st.After(cur) {
-							finished = step.Finished
-						}
-					}
-				}
-			}
-			sessions = append(sessions, publishSession{
-				Slug:       slug,
-				Started:    started,
-				Finished:   finished,
-				SubjectIDs: ids,
-				Subjects:   names,
-				Steps:      steps,
+		sessions = append(sessions, publishSession{
+			Slug:       slug,
+			Started:    earliestPublishStepStart(steps),
+			Finished:   latestPublishStepFinish(steps),
+			SubjectIDs: ids,
+			Subjects:   names,
+			Steps:      steps,
 		})
 	}
 	sort.Slice(sessions, func(i, j int) bool {
@@ -1810,6 +1809,44 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 		return sessions[i].Slug < sessions[j].Slug
 	})
 	return sessions, nil
+}
+
+func earliestPublishStepStart(steps []publishStep) string {
+	earliest := ""
+	for _, step := range steps {
+		if strings.TrimSpace(step.Started) == "" {
+			continue
+		}
+		if earliest == "" {
+			earliest = step.Started
+			continue
+		}
+		stepTS, stepErr := util.ParseTimestamp(step.Started)
+		curTS, curErr := util.ParseTimestamp(earliest)
+		if stepErr == nil && curErr == nil && stepTS.Before(curTS) {
+			earliest = step.Started
+		}
+	}
+	return earliest
+}
+
+func latestPublishStepFinish(steps []publishStep) string {
+	latest := ""
+	for _, step := range steps {
+		if strings.TrimSpace(step.Finished) == "" {
+			continue
+		}
+		if latest == "" {
+			latest = step.Finished
+			continue
+		}
+		stepTS, stepErr := util.ParseTimestamp(step.Finished)
+		curTS, curErr := util.ParseTimestamp(latest)
+		if stepErr == nil && curErr == nil && stepTS.After(curTS) {
+			latest = step.Finished
+		}
+	}
+	return latest
 }
 
 func parseSubjectIDs(v any) []string {
@@ -1883,7 +1920,7 @@ func parseSessionSubjects(sessionBody string) []sessionSubjectRef {
 	return out
 }
 
-func renderPublishHTML(root, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
+func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
 	studyMeta := fmt.Sprintf("<p>Status: %s<br/>Created: %s</p>", escapeHTML(asString(studyFM["status"])), escapeHTML(asString(studyFM["created_on"])))
 	wip := ""
 	if incomplete {
@@ -1897,7 +1934,6 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 		protocolSteps = "<li>No protocol steps found</li>"
 	}
 
-	assetOut := filepath.Join(root, "publish", "site", "assets")
 	sessionHTML := ""
 	for _, s := range sessions {
 		sessionHTML += "<section><h3>Session " + escapeHTML(s.Slug) + "</h3>"
@@ -1907,19 +1943,11 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 		for _, st := range s.Steps {
 			sessionHTML += "<li><strong>" + escapeHTML(st.Name) + "</strong> [" + escapeHTML(st.Started) + " - " + escapeHTML(st.Finished) + "]"
 			if len(st.ImageRefs) > 0 {
-				sessionHTML += "<div>"
-				for _, img := range st.ImageRefs {
-					relDest := filepath.Join("assets", s.Slug, st.Slug, filepath.Base(img))
-					dest := filepath.Join(assetOut, s.Slug, st.Slug, filepath.Base(img))
-					_ = util.EnsureDir(filepath.Dir(dest))
-					_ = copyFile(img, dest)
-					sessionHTML += `<img src="` + escapeHTML(relDest) + `" style="max-width:220px;max-height:220px;margin:4px"/>`
-				}
-				sessionHTML += "</div>"
+				sessionHTML += fmt.Sprintf(" images: %d", len(st.ImageRefs))
 			}
 			sessionHTML += "</li>"
 		}
-		sessionHTML += "</ul></section>"
+		sessionHTML += "</ul><p><a href=\"session/" + escapeHTML(s.Slug) + "/index.html\">Compare photos across steps</a></p></section>"
 	}
 	if sessionHTML == "" {
 		sessionHTML = "<p>No sessions.</p>"
@@ -1934,6 +1962,101 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 		"<h2>Protocol Steps</h2><ol>" + protocolSteps + "</ol>" +
 		"<h2>Sessions</h2>" + sessionHTML +
 		"</body></html>"
+}
+
+func renderPublishSessionHTML(sessionDir, title string, s publishSession, incomplete bool) (string, error) {
+	wip := ""
+	if incomplete {
+		wip = `<div style="padding:8px;background:#ffe9e9;border:1px solid #d66"><strong>WIP</strong> Incomplete study data</div>`
+	}
+	columns := ""
+	for _, st := range s.Steps {
+		column := `<section class="step-column"><h2>` + escapeHTML(st.Name) + `</h2><div class="step-images">`
+		for _, img := range st.ImageRefs {
+			relURL, dest, err := publishAssetOutputPaths(sessionDir, st.Slug, img)
+			if err != nil {
+				return "", err
+			}
+			if err := util.EnsureDir(filepath.Dir(dest)); err != nil {
+				return "", err
+			}
+			if err := publishAssetForHTML(img, dest); err != nil {
+				return "", err
+			}
+			column += `<img src="` + escapeHTML(relURL) + `" alt="` + escapeHTML(st.Name) + `" />`
+		}
+		column += `</div></section>`
+		columns += column
+	}
+	if columns == "" {
+		columns = `<p>No step images.</p>`
+	}
+	return `<!doctype html><html><head><meta charset="utf-8"><title>` + escapeHTML(title) + `</title><style>
+body{margin:0;font-family:Helvetica,Arial,sans-serif;background:#f6f1e8;color:#1f1b16;}
+.comparison-page{min-height:100vh;}
+.session-header{position:sticky;top:0;display:flex;justify-content:space-between;gap:16px;padding:16px 20px;border-bottom:1px solid #d2c5b3;background:rgba(246,241,232,.96);backdrop-filter:blur(8px);}
+.session-header h1{margin:0;font-size:20px;}
+.session-header p{margin:2px 0 0;font-size:14px;}
+.comparison-columns{display:flex;gap:20px;align-items:flex-start;overflow-x:auto;padding:20px;}
+.step-column{flex:0 0 40vw;width:40vw;min-width:320px;max-height:calc(100vh - 96px);padding:16px;border:1px solid #d2c5b3;background:#fffaf2;overflow-y:auto;}
+.step-column h2{position:sticky;top:-16px;margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid #e4d8c8;background:#fffaf2;}
+.step-images{display:flex;flex-direction:column;gap:12px;}
+.step-images img{display:block;width:100%;height:auto;border:1px solid #d2c5b3;background:#efe6da;}
+@media (max-width: 900px){.comparison-columns{flex-direction:column;}.step-column{width:auto;min-width:0;max-height:none;}}
+</style></head><body><div class="comparison-page">` + wip + `<header class="session-header"><div><p><a href="../../index.html">Back to study</a></p><h1>` + escapeHTML(sessionDisplayName(s)) + `</h1><p>Session start: ` + escapeHTML(sessionStartDate(s.Started)) + `</p></div><p>` + escapeHTML(s.Slug) + `</p></header><main class="comparison-columns">` + columns + `</main></div></body></html>`, nil
+}
+
+func sessionStartDate(started string) string {
+	parts := strings.Fields(strings.TrimSpace(started))
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return started
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sessionDisplayName(s publishSession) string {
+	for _, subject := range s.Subjects {
+		if strings.TrimSpace(subject) != "" {
+			return subject
+		}
+	}
+	return firstNonEmpty(s.Slug)
+}
+
+func publishAssetOutputPaths(sessionDir, stepSlug, src string) (string, string, error) {
+	name := filepath.Base(src)
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == ".heic" || ext == ".heif" {
+		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".jpg"
+	}
+	relURL := path.Join("assets", stepSlug, name)
+	dest := filepath.Join(sessionDir, filepath.FromSlash(relURL))
+	return relURL, dest, nil
+}
+
+func publishAssetForHTML(src, dest string) error {
+	ext := strings.ToLower(filepath.Ext(src))
+	if ext == ".heic" || ext == ".heif" {
+		return publishImagePreviewFn(src, dest)
+	}
+	return copyFile(src, dest)
+}
+
+func publishImagePreview(src, dst string) error {
+	cmd := exec.Command("sips", "-s", "format", "jpeg", src, "--out", dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("render publish preview for %s: %w: %s", src, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func renderPublishText(title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession) string {
@@ -2572,6 +2695,7 @@ type ingestStats struct {
 }
 
 var exifCaptureTimeFn = exifCaptureTime
+
 const photosLibraryMTimeSkew = 6 * time.Hour
 
 type sessionIngestPlan struct {
@@ -2642,7 +2766,7 @@ func resolvePhotosLibraryAssetSubdir(path string) (string, bool) {
 }
 
 type studyGuideConfig struct {
-	PhotosLibraryPath       string `yaml:"photos_library_path"`
+	PhotosLibraryPath      string `yaml:"photos_library_path"`
 	PhotoLibraryPathLegacy string `yaml:"photo_library_path"`
 }
 
