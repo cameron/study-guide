@@ -6,3 +6,10 @@
     - # Steps / - step: description / ...
 - web ui instead of CLI?
   - could show subject photos to make sessions easier to differentiate
+  - sessions published anonymously
+  - subject key decrypts subject name (so you can send a link to the paper to a subject
+    and they can see their own data)
+- subject intake
+  - introduction to the study
+  - information release
+  - thanks

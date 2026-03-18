@@ -249,10 +249,7 @@ func cmdSubject(args []string) error {
 		}
 		return subjectSearch(strings.Join(args[1:], " "))
 	case "print":
-		if len(args) < 2 {
-			return errors.New("usage: sg subject print <id-or-name>")
-		}
-		return subjectPrint(strings.Join(args[1:], " "))
+		return subjectPrint(args[1:])
 	case "rm":
 		if len(args) < 2 {
 			return errors.New("usage: sg subject rm <id>")
@@ -450,7 +447,22 @@ func subjectSearch(q string) error {
 	return nil
 }
 
-func subjectPrint(q string) error {
+func subjectPrint(args []string) error {
+	all, q := parseSubjectPrintArgs(args)
+	if q == "" {
+		subjects, err := subjectPrintList(all)
+		if err != nil {
+			return err
+		}
+		if len(subjects) == 0 {
+			fmt.Println("no subjects")
+			return nil
+		}
+		for _, s := range subjects {
+			fmt.Printf("- %s (%s)\n", s.Name, s.UUID)
+		}
+		return nil
+	}
 	matches, err := store.FindSubject(q)
 	if err != nil {
 		return err
@@ -465,6 +477,72 @@ func subjectPrint(q string) error {
 	md := fmt.Sprintf("# Subject\n\n- Name: %s\n- UUID: %s\n- Email: %s\n- Phone: %s\n- Age: %s\n- Sex: %s\n", s.Name, s.UUID, s.Email, s.Phone, s.Age, s.Sex)
 	util.PrintMarkdown(md)
 	return nil
+}
+
+func parseSubjectPrintArgs(args []string) (bool, string) {
+	all := false
+	queryParts := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--all" {
+			all = true
+			continue
+		}
+		queryParts = append(queryParts, arg)
+	}
+	return all, strings.TrimSpace(strings.Join(queryParts, " "))
+}
+
+func subjectPrintList(all bool) ([]store.Subject, error) {
+	subjects, err := store.ListSubjects()
+	if err != nil {
+		return nil, err
+	}
+	if all {
+		return subjects, nil
+	}
+	root, err := util.StudyRootFromCwd()
+	if err != nil {
+		return subjects, nil
+	}
+	return currentStudySubjects(root, subjects)
+}
+
+func currentStudySubjects(root string, subjects []store.Subject) ([]store.Subject, error) {
+	slugs, err := listSessionSlugs(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ids := map[string]bool{}
+	names := map[string]bool{}
+	for _, slug := range slugs {
+		_, body, err := util.ReadFrontmatterFile(filepath.Join(root, "session", slug, "session.sg.md"))
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range parseSessionSubjects(body) {
+			if id := strings.TrimSpace(ref.ID); id != "" {
+				ids[id] = true
+			}
+			if name := strings.TrimSpace(ref.Name); name != "" {
+				names[strings.ToLower(name)] = true
+			}
+		}
+	}
+	filtered := make([]store.Subject, 0, len(subjects))
+	seen := map[string]bool{}
+	for _, s := range subjects {
+		if seen[s.UUID] {
+			continue
+		}
+		if ids[s.UUID] || names[strings.ToLower(strings.TrimSpace(s.Name))] {
+			filtered = append(filtered, s)
+			seen[s.UUID] = true
+		}
+	}
+	return filtered, nil
 }
 
 func subjectEdit(q string) error {
@@ -1655,7 +1733,10 @@ func cmdPublishAtRoot(root string) error {
 	if err != nil {
 		return err
 	}
-	protocol, _ := store.ParseProtocol(root)
+	protocol, err := store.ParseProtocol(root)
+	if err != nil {
+		return err
+	}
 	title := store.ExtractStudyTitle(studyBody)
 	if title == "" {
 		title = "Untitled Study"
@@ -1701,12 +1782,20 @@ func cmdPublishAtRoot(root string) error {
 }
 
 func writePublishSessionPages(root, title string, sessions []publishSession, incomplete bool) error {
-	for _, s := range sessions {
+	for i, s := range sessions {
 		sessionDir := filepath.Join(root, "publish", "site", "session", s.Slug)
 		if err := util.EnsureDir(sessionDir); err != nil {
 			return err
 		}
-		html, err := renderPublishSessionHTML(sessionDir, title, s, incomplete)
+		var prevSession *publishSession
+		var nextSession *publishSession
+		if i > 0 {
+			prevSession = &sessions[i-1]
+		}
+		if i+1 < len(sessions) {
+			nextSession = &sessions[i+1]
+		}
+		html, err := renderPublishSessionHTML(sessionDir, title, s, prevSession, nextSession, incomplete)
 		if err != nil {
 			return err
 		}
@@ -1922,9 +2011,9 @@ func parseSessionSubjects(sessionBody string) []sessionSubjectRef {
 
 func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
 	studyMeta := fmt.Sprintf("<p>Status: %s<br/>Created: %s</p>", escapeHTML(asString(studyFM["status"])), escapeHTML(asString(studyFM["created_on"])))
-	wip := ""
+	wipBadge := ""
 	if incomplete {
-		wip = `<div style="padding:8px;background:#ffe9e9;border:1px solid #d66"><strong>WIP</strong> Incomplete study data</div>`
+		wipBadge = ` <span style="display:inline-block;padding:2px 8px;border:1px solid #b94a48;border-radius:999px;font-size:12px;vertical-align:middle;color:#7a1f1c;background:#ffe9e9;">WIP</span>`
 	}
 	protocolSteps := ""
 	for _, step := range protocol.Steps {
@@ -1939,6 +2028,14 @@ func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody
 		sessionHTML += "<section><h3>Session " + escapeHTML(s.Slug) + "</h3>"
 		sessionHTML += "<p>Started: " + escapeHTML(s.Started) + "<br/>Finished: " + escapeHTML(s.Finished) + "</p>"
 		sessionHTML += "<p>Subjects: " + escapeHTML(strings.Join(s.Subjects, ", ")) + "</p>"
+		sessionHTML += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">`
+		for _, st := range s.Steps {
+			for _, img := range st.ImageRefs {
+				thumbURL := "session/" + path.Join(s.Slug, publishAssetRelativeURL(st.Slug, img))
+				sessionHTML += `<a href="session/` + escapeHTML(s.Slug) + `/index.html"><img src="` + escapeHTML(thumbURL) + `" alt="` + escapeHTML(st.Name) + `" style="display:block;width:72px;height:72px;object-fit:cover;border:1px solid #d2c5b3;background:#efe6da;" /></a>`
+			}
+		}
+		sessionHTML += `</div>`
 		sessionHTML += "<ul>"
 		for _, st := range s.Steps {
 			sessionHTML += "<li><strong>" + escapeHTML(st.Name) + "</strong> [" + escapeHTML(st.Started) + " - " + escapeHTML(st.Finished) + "]"
@@ -1953,7 +2050,7 @@ func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody
 		sessionHTML = "<p>No sessions.</p>"
 	}
 
-	return "<html><body>" + wip + "<h1>" + escapeHTML(title) + "</h1>" +
+	return "<html><body><h1>" + escapeHTML(title) + wipBadge + "</h1>" +
 		studyMeta +
 		"<h2>Hypotheses</h2><pre>" + escapeHTML(extractSection(studyBody, "Hypotheses")) + "</pre>" +
 		"<h2>Discussion</h2><pre>" + escapeHTML(extractSection(studyBody, "Discussion")) + "</pre>" +
@@ -1964,11 +2061,7 @@ func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody
 		"</body></html>"
 }
 
-func renderPublishSessionHTML(sessionDir, title string, s publishSession, incomplete bool) (string, error) {
-	wip := ""
-	if incomplete {
-		wip = `<div style="padding:8px;background:#ffe9e9;border:1px solid #d66"><strong>WIP</strong> Incomplete study data</div>`
-	}
+func renderPublishSessionHTML(sessionDir, title string, s publishSession, prevSession, nextSession *publishSession, incomplete bool) (string, error) {
 	columns := ""
 	for _, st := range s.Steps {
 		column := `<section class="step-column"><h2>` + escapeHTML(st.Name) + `</h2><div class="step-images">`
@@ -1991,19 +2084,105 @@ func renderPublishSessionHTML(sessionDir, title string, s publishSession, incomp
 	if columns == "" {
 		columns = `<p>No step images.</p>`
 	}
+	_ = incomplete
+	sessionNav := `<span class="session-nav">`
+	if prevSession != nil {
+		sessionNav += `<span class="header-sep">|</span>`
+		sessionNav += `<a class="session-link prev-session-link" href="../` + escapeHTML(prevSession.Slug) + `/index.html">Prev</a>`
+	}
+	if nextSession != nil {
+		sessionNav += `<span class="header-sep">|</span>`
+		sessionNav += `<a class="session-link next-session-link" href="../` + escapeHTML(nextSession.Slug) + `/index.html">Next</a>`
+	}
+	sessionNav += `</span>`
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + escapeHTML(title) + `</title><style>
-body{margin:0;font-family:Helvetica,Arial,sans-serif;background:#f6f1e8;color:#1f1b16;}
+body{margin:0;font-family:Helvetica,Arial,sans-serif;background:#f6f1e8;color:#1f1b16;--image-size:40vw;}
 .comparison-page{min-height:100vh;}
-.session-header{position:sticky;top:0;display:flex;justify-content:space-between;gap:16px;padding:16px 20px;border-bottom:1px solid #d2c5b3;background:rgba(246,241,232,.96);backdrop-filter:blur(8px);}
-.session-header h1{margin:0;font-size:20px;}
-.session-header p{margin:2px 0 0;font-size:14px;}
-.comparison-columns{display:flex;gap:20px;align-items:flex-start;overflow-x:auto;padding:20px;}
-.step-column{flex:0 0 40vw;width:40vw;min-width:320px;max-height:calc(100vh - 96px);padding:16px;border:1px solid #d2c5b3;background:#fffaf2;overflow-y:auto;}
-.step-column h2{position:sticky;top:-16px;margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid #e4d8c8;background:#fffaf2;}
-.step-images{display:flex;flex-direction:column;gap:12px;}
-.step-images img{display:block;width:100%;height:auto;border:1px solid #d2c5b3;background:#efe6da;}
-@media (max-width: 900px){.comparison-columns{flex-direction:column;}.step-column{width:auto;min-width:0;max-height:none;}}
-</style></head><body><div class="comparison-page">` + wip + `<header class="session-header"><div><p><a href="../../index.html">Back to study</a></p><h1>` + escapeHTML(sessionDisplayName(s)) + `</h1><p>Session start: ` + escapeHTML(sessionStartDate(s.Started)) + `</p></div><p>` + escapeHTML(s.Slug) + `</p></header><main class="comparison-columns">` + columns + `</main></div></body></html>`, nil
+.session-header{position:sticky;top:0;padding:6px 10px 0;background:rgba(246,241,232,.96);backdrop-filter:blur(8px);}
+.header-line{display:flex;align-items:center;gap:6px;font-size:13px;line-height:1.1;white-space:nowrap;overflow:hidden;}
+.header-link,.header-date,.header-subject{display:block;overflow:hidden;text-overflow:ellipsis;}
+.header-link{color:inherit;text-decoration:none;flex:0 0 auto;}
+.session-link{color:inherit;text-decoration:none;flex:0 0 auto;}
+.session-nav{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.header-sep{flex:0 0 auto;color:#8a7f72;}
+.header-date{flex:0 0 auto;}
+.header-subject{flex:1 1 auto;min-width:0;font-weight:600;}
+.orientation-controls{display:flex;align-items:center;gap:2px;flex:0 0 auto;}
+.orientation-controls label{display:flex;align-items:center;gap:3px;padding:0 2px;height:24px;box-sizing:border-box;}
+.orientation-controls input[type="radio"]{margin:0;}
+.image-size-controls{display:flex;align-items:center;gap:4px;flex:0 0 auto;margin-left:auto;}
+.image-size-controls button{border:1px solid #b7aa98;background:#fffaf2;padding:6px 10px;font:inherit;cursor:pointer;}
+.image-size-controls button,.image-size-controls input[type="range"]{height:24px;box-sizing:border-box;}
+.image-size-controls input[type="range"]{width:110px;margin:0;}
+.comparison-columns{display:flex;gap:0;align-items:flex-start;overflow-x:auto;padding:0 0 0;margin-top:2px;}
+.comparison-columns.rows{flex-direction:column;overflow-x:visible;overflow-y:auto;}
+.step-column{flex:0 0 min(var(--image-size), 40vw);width:min(var(--image-size), 40vw);min-width:50px;max-height:calc(100vh - 52px);padding:0;border:1px solid #d2c5b3;background:#fffaf2;overflow-y:auto;}
+.step-column + .step-column{border-left:0;}
+.comparison-columns.rows .step-column{display:grid;grid-template-columns:120px 1fr;width:100%;max-width:none;max-height:none;overflow:visible;}
+.comparison-columns.rows .step-column + .step-column{border-left:1px solid #d2c5b3;border-top:0;}
+.comparison-columns.rows .step-column h2{position:static;display:flex;align-items:center;min-height:100%;padding:8px;border-right:1px solid #e4d8c8;border-bottom:0;}
+.comparison-columns.rows .step-images{display:flex;flex-direction:row;gap:6px;overflow-x:auto;overflow-y:visible;padding:6px;}
+.comparison-columns.rows .step-images img{width:var(--image-size);max-width:40vw;height:auto;object-fit:contain;align-self:flex-start;flex:0 0 auto;}
+.step-column h2{position:sticky;top:0;margin:0;padding:8px 10px;font-size:13px;border-bottom:1px solid #e4d8c8;background:#fffaf2;}
+.step-images{display:flex;flex-direction:column;gap:6px;}
+.step-images img{display:block;width:100%;height:auto;background:#efe6da;}
+@media (max-width: 900px){.session-header{padding:6px 8px 0;}.header-line{gap:4px;font-size:12px;}.image-size-controls input[type="range"]{width:84px;}.comparison-columns{flex-direction:column;margin-top:2px;}.step-column{width:min(var(--image-size), calc(100vw - 8px));max-height:none;}.step-column + .step-column{border-left:1px solid #d2c5b3;}.orientation-controls label{padding:0 2px;}.comparison-columns.rows .step-column{grid-template-columns:88px 1fr;}.comparison-columns.rows .step-images img{max-width:calc(100vw - 120px);}}
+</style><script>
+function setImageSize(size){document.body.style.setProperty('--image-size', size);}
+function applyStoredImageSize(){
+const storedSize = localStorage.getItem('sg_publish_image_size');
+if (!storedSize) {
+return;
+}
+setImageSize(storedSize);
+const slider = document.getElementById('image-size-slider');
+if (!slider) {
+return;
+}
+if (storedSize.endsWith('px')) {
+slider.value = storedSize.slice(0, -2);
+return;
+}
+if (storedSize.endsWith('vw')) {
+slider.value = String(Number(storedSize.slice(0, -2)) * 10);
+}
+}
+function persistImageSize(size){
+localStorage.setItem('sg_publish_image_size', size);
+}
+function applyStoredOrientation(){
+const storedOrientation = localStorage.getItem('sg_publish_orientation');
+if (!storedOrientation) {
+return;
+}
+setOrientation(storedOrientation);
+const radio = document.querySelector('input[name="layout-orientation"][value="' + storedOrientation + '"]');
+if (radio) {
+radio.checked = true;
+}
+}
+function setOrientation(value){
+const layout = document.getElementById('comparison-columns');
+layout.dataset.orientation = value;
+layout.className = value === 'rows' ? 'comparison-columns rows' : 'comparison-columns';
+localStorage.setItem('sg_publish_orientation', value);
+}
+function setImageSizeFromSlider(value){
+const sliderValue = Number(value);
+if (sliderValue <= 100) {
+const size = sliderValue + 'px';
+setImageSize(size);
+persistImageSize(size);
+return;
+}
+const size = (sliderValue / 10) + 'vw';
+setImageSize(size);
+persistImageSize(size);
+}
+function syncImageSizeSlider(value){
+document.getElementById('image-size-slider').value = value;
+}
+</script></head><body onload="applyStoredImageSize();applyStoredOrientation()"><div class="comparison-page"><header class="session-header"><div class="header-line"><a class="header-link" href="../../index.html">Up</a>` + sessionNav + `<span class="header-sep">|</span><span class="header-date">` + escapeHTML(sessionStartDate(s.Started)) + `</span><span class="header-sep">|</span><span class="header-subject">` + escapeHTML(sessionDisplayName(s)) + `</span><span class="orientation-controls"><label><input type="radio" name="layout-orientation" value="columns" checked onchange="setOrientation('columns')" />Cols</label><label><input type="radio" name="layout-orientation" value="rows" onchange="setOrientation('rows')" />Rows</label></span><span class="image-size-controls"><button type="button" onclick="syncImageSizeSlider(50);setImageSize('50px');persistImageSize('50px')">Small</button><input id="image-size-slider" type="range" min="50" max="400" value="400" oninput="setImageSizeFromSlider(this.value)" aria-label="Image size" /><button type="button" onclick="syncImageSizeSlider(400);setImageSize('40vw');persistImageSize('40vw')">Large</button></span></div></header><main id="comparison-columns" class="comparison-columns" data-orientation="columns">` + columns + `</main></div></body></html>`, nil
 }
 
 func sessionStartDate(started string) string {
@@ -2033,22 +2212,48 @@ func sessionDisplayName(s publishSession) string {
 }
 
 func publishAssetOutputPaths(sessionDir, stepSlug, src string) (string, string, error) {
+	relURL := publishAssetRelativeURL(stepSlug, src)
+	dest := filepath.Join(sessionDir, filepath.FromSlash(relURL))
+	return relURL, dest, nil
+}
+
+func publishAssetRelativeURL(stepSlug, src string) string {
 	name := filepath.Base(src)
 	ext := strings.ToLower(filepath.Ext(name))
 	if ext == ".heic" || ext == ".heif" {
 		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".jpg"
 	}
-	relURL := path.Join("assets", stepSlug, name)
-	dest := filepath.Join(sessionDir, filepath.FromSlash(relURL))
-	return relURL, dest, nil
+	return path.Join("assets", stepSlug, name)
 }
 
 func publishAssetForHTML(src, dest string) error {
+	upToDate, err := publishAssetUpToDate(src, dest)
+	if err != nil {
+		return err
+	}
+	if upToDate {
+		return nil
+	}
 	ext := strings.ToLower(filepath.Ext(src))
 	if ext == ".heic" || ext == ".heif" {
 		return publishImagePreviewFn(src, dest)
 	}
 	return copyFile(src, dest)
+}
+
+func publishAssetUpToDate(src, dest string) (bool, error) {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return false, err
+	}
+	destInfo, err := os.Stat(dest)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return !destInfo.ModTime().Before(srcInfo.ModTime()), nil
 }
 
 func publishImagePreview(src, dst string) error {
@@ -3085,13 +3290,12 @@ func writePDF(path, title, body string, incomplete bool) error {
 	p := fpdf.New("P", "mm", "A4", "")
 	p.AddPage()
 	p.SetFont("Arial", "B", 16)
-	p.CellFormat(0, 10, title, "", 1, "L", false, 0, "")
-	p.SetFont("Arial", "", 11)
+	titleLine := title
 	if incomplete {
-		p.SetTextColor(170, 40, 40)
-		p.CellFormat(0, 8, "WIP", "", 1, "L", false, 0, "")
-		p.SetTextColor(0, 0, 0)
+		titleLine += " (WIP)"
 	}
+	p.CellFormat(0, 10, titleLine, "", 1, "L", false, 0, "")
+	p.SetFont("Arial", "", 11)
 	p.Ln(2)
 	p.MultiCell(0, 5, body, "", "L", false)
 	return p.OutputFileAndClose(path)

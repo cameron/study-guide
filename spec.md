@@ -124,6 +124,7 @@ Required markdown sections:
 - each step is an H2 heading under `# Steps`
 - heading text is step display name
 - step slug is an ordered prefix plus normalized heading: `<NN>-<kebab-step-name>` where `NN` is 1-based, zero-padded to at least two digits (`01`, `02`, ...)
+- when a step heading changes but its protocol position stays the same, existing session step directories for that ordinal are renamed to the regenerated step slug and keep their `step.sg.md` plus `asset/` contents
 - optional step description is free-form markdown directly below the step heading until the next H2 (or next H1 section)
 
 Optional markdown sections:
@@ -238,8 +239,14 @@ Creates:
 ### `sg subject search <name>`
 Search global subjects by name.
 
-### `sg subject print <id-or-name>`
-Print one subject.
+### `sg subject print [<id-or-name>] [--all]`
+Print subject information.
+
+Behavior:
+- when `<id-or-name>` is provided, print exactly one matching subject
+- when no `<id-or-name>` is provided and the current working directory is inside a study, print the distinct subjects referenced by session `# Subjects` sections in that study
+- when no `<id-or-name>` is provided and the current working directory is not inside a study, print all subjects
+- `--all` forces printing all subjects even when inside a study
 
 ### `sg subject ls`
 List subjects by name.
@@ -496,7 +503,7 @@ All criteria below are pass/fail requirements for v1.
 5. Custom required fields (non-built-in keys) are prompted in subject creation and persisted to subject frontmatter.
 6. Fixed subject-requirement key/value pairs are shown in the create form as fixed and written to the subject.
 7. `sg subject search <name>` returns matching subjects by name.
-8. `sg subject print <id-or-name>` prints exactly one matching subject or a clear not-found/ambiguous error.
+8. `sg subject print [<id-or-name>] [--all]` prints exactly one matching subject for explicit queries; with no query it prints current-study subjects, or all subjects when outside a study or when `--all` is set.
 9. `sg subject ls` lists subjects in a human-readable format.
 10. `sg subject rm <id>` deletes only the targeted subject file and leaves others unchanged.
 11. `sg subject edit <id-or-name>` updates a single subject interactively and preserves UUID/path.
@@ -505,8 +512,9 @@ All criteria below are pass/fail requirements for v1.
 1. `protocol.sg.md` is accepted only when `# Protocol Summary` and `# Steps` exist.
 2. Step definitions are parsed from H2 headings under `# Steps`.
 3. Step slugs are `<NN>-<kebab-step-name>` using protocol order (`NN` is zero-padded 1-based index).
-4. Optional step descriptions are parsed from markdown content directly under each H2 step heading.
-5. Step order in parsed output matches source order in `protocol.sg.md`.
+4. Parsing the study protocol reconciles existing session step directory names to the current ordinal-based step slugs.
+5. Optional step descriptions are parsed from markdown content directly under each H2 step heading.
+6. Step order in parsed output matches source order in `protocol.sg.md`.
 
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
@@ -591,14 +599,38 @@ All criteria below are pass/fail requirements for v1.
 - study title + metadata
 - hypotheses, discussion, conclusion
 - protocol summary + step list
-- sessions in chronological order
-- per-session subject list, step timeline, and associated images
-  - a per-session comparison page with a minimal header showing the subject name and session start date, plus one vertically scrollable image column per protocol step labeled with the step name
-  - HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
+- sessions in chronological order, including chrono-ordered thumbnails of photos
+- HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
+- page per session
+  - compact single-line toolbar with link back to index, session start date (unlabeled), subject name, and image-size controls
+    - navigation controls are normal links labeled `Up`, `Prev`, and `Next`
+    - toolbar includes previous/next session links when adjacent sessions exist
+    - do not show `WIP` on the session page
+    - js controls that scale the size of the images: working slider plus easy min/max buttons
+      - slider spans the same range as the buttons: min 50x50; max 40vw
+      - chosen image size persists across session pages
+  - body supports toggling between step columns and step rows
+    - default orientation is columns
+    - toolbar includes radio-button controls to switch orientation
+    - layout radios are plain controls, not button-styled boxes
+    - chosen orientation persists across session pages
+  - in column mode, body is a series of columns, one per protocol step, each with a small header (step name)
+    - columns have no padding, minimal border, and no gutter between columns
+      - enables photos to be compared side-by-side
+  - in row mode, body stacks steps vertically as rows with the same compact styling
+    - each row has a short step-name cell on the left and an image strip on the right
+    - row-mode image width follows the same image-size control rather than stretching to full row width
+    - row-mode images keep their aspect ratio and are not distorted by the size control
+    - row-mode images are fully visible and are not clipped vertically
+  - only a single small separation between the toolbar and the column area
+    - do not use both a header/content border and extra padding to create that separation
+  - small vertical padding between photos in columns;
 4. `sg publish` runs status checks before rendering outputs.
 5. If required sections/steps/fields are missing, `study.sg.md` is updated to `status: WIP`.
-6. If incomplete, both HTML and PDF outputs visibly indicate `WIP`.
+6. If incomplete, both HTML and PDF outputs visibly indicate `WIP` (but not as a global header)
 7. If complete, study status is not downgraded to `WIP`.
+8. If `protocol.sg.md` cannot be parsed, `sg publish` fails instead of silently rendering an empty protocol.
+9. `sg publish` reuses previously rendered HTML image assets when the publish output is already up to date, and does not re-render unchanged HEIC/HEIF previews.
 
 ### H. Data Integrity and Safety
 1. Commands modify only files they are responsible for.

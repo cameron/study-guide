@@ -6,3 +6,8 @@
   - make "enter" on the focused row advance it
 - subject creation from session creation should create both subject and session
   immediately and return to session board
+- remove `sg subject emails`
+- update `sg subject print`
+  - default behavior should be to print current study subjects (unless not in a study)
+  - add `--all` flag to allow printing all
+- enable regeneration of step folder names if protocol step names change

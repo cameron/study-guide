@@ -127,7 +127,14 @@ func ParseProtocol(studyRoot string) (Protocol, error) {
 	if err != nil {
 		return Protocol{}, err
 	}
-	return ParseProtocolMarkdown(string(b))
+	protocol, err := ParseProtocolMarkdown(string(b))
+	if err != nil {
+		return Protocol{}, err
+	}
+	if err := reconcileSessionStepDirectories(studyRoot, protocol); err != nil {
+		return Protocol{}, err
+	}
+	return protocol, nil
 }
 
 func ParseProtocolMarkdown(md string) (Protocol, error) {
@@ -212,4 +219,59 @@ func ExtractStudyTitle(body string) string {
 		}
 	}
 	return ""
+}
+
+func reconcileSessionStepDirectories(studyRoot string, protocol Protocol) error {
+	sessionRoot := filepath.Join(studyRoot, "session")
+	entries, err := os.ReadDir(sessionRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := reconcileSessionStepDirectory(filepath.Join(sessionRoot, entry.Name()), protocol); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reconcileSessionStepDirectory(sessionDir string, protocol Protocol) error {
+	stepRoot := filepath.Join(sessionDir, "step")
+	for _, step := range protocol.Steps {
+		targetDir := filepath.Join(stepRoot, step.Slug)
+		if _, err := os.Stat(targetDir); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		matches, err := filepath.Glob(filepath.Join(stepRoot, stepSlugOrdinalPrefix(step.Slug)+"*"))
+		if err != nil {
+			return err
+		}
+		if len(matches) == 0 {
+			continue
+		}
+		if len(matches) > 1 {
+			return fmt.Errorf("session step directory reconcile ambiguous for %s", step.Slug)
+		}
+		if err := os.Rename(matches[0], targetDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stepSlugOrdinalPrefix(slug string) string {
+	prefix, _, ok := strings.Cut(slug, "-")
+	if !ok {
+		return slug
+	}
+	return prefix + "-"
 }
