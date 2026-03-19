@@ -1,2 +1,2 @@
-- publish is slow
-  - is there opportunity for parallelizing image processing?
+- enable protocol step renaming
+  - should regenerate folder slugs at least (there may be other dependencies)

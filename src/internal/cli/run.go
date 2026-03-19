@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -1781,6 +1782,9 @@ func cmdPublishAtRoot(root string, opts publishOptions) error {
 	if err := writePublishSessionPages(root, title, sessions, incomplete); err != nil {
 		return err
 	}
+	if err := writePublishIndexThumbnails(root, sessions); err != nil {
+		return err
+	}
 	html, err := renderPublishHTML(root, title, studyFM, studyBody, protocol, sessions, incomplete)
 	if err != nil {
 		return err
@@ -1798,11 +1802,19 @@ func cmdPublishAtRoot(root string, opts publishOptions) error {
 }
 
 func writePublishSessionPages(root, title string, sessions []publishSession, incomplete bool) error {
-	for i, s := range sessions {
+	tasks := make([]func() error, 0)
+	for _, s := range sessions {
 		sessionDir := filepath.Join(root, "publish", "site", "session", s.PublishSlug)
 		if err := util.EnsureDir(sessionDir); err != nil {
 			return err
 		}
+		tasks = append(tasks, publishSessionAssetTasks(sessionDir, s)...)
+	}
+	if err := runPublishTasks(tasks); err != nil {
+		return err
+	}
+	for i, s := range sessions {
+		sessionDir := filepath.Join(root, "publish", "site", "session", s.PublishSlug)
 		var prevSession *publishSession
 		var nextSession *publishSession
 		if i > 0 {
@@ -1820,6 +1832,119 @@ func writePublishSessionPages(root, title string, sessions []publishSession, inc
 		}
 	}
 	return nil
+}
+
+func writePublishIndexThumbnails(root string, sessions []publishSession) error {
+	siteDir := filepath.Join(root, "publish", "site")
+	return runPublishTasks(publishIndexThumbnailTasks(siteDir, sessions))
+}
+
+func publishSessionAssetTasks(sessionDir string, s publishSession) []func() error {
+	tasks := make([]func() error, 0)
+	for _, step := range s.Steps {
+		step := step
+		for _, img := range step.ImageRefs {
+			img := img
+			tasks = append(tasks, func() error {
+				_, dest, err := publishAssetOutputPaths(sessionDir, step.Slug, img)
+				if err != nil {
+					return err
+				}
+				if err := util.EnsureDir(filepath.Dir(dest)); err != nil {
+					return err
+				}
+				return publishAssetForHTML(img, dest)
+			})
+		}
+	}
+	return tasks
+}
+
+func publishIndexThumbnailTasks(siteDir string, sessions []publishSession) []func() error {
+	tasks := make([]func() error, 0)
+	for _, session := range sessions {
+		session := session
+		for _, step := range session.Steps {
+			step := step
+			for _, img := range step.ImageRefs {
+				img := img
+				tasks = append(tasks, func() error {
+					sessionAssetPath := filepath.Join(siteDir, "session", session.PublishSlug, filepath.FromSlash(publishAssetRelativeURL(step.Slug, img)))
+					_, thumbDest, err := publishIndexThumbnailOutputPaths(siteDir, session.PublishSlug, step.Slug, img)
+					if err != nil {
+						return err
+					}
+					if err := util.EnsureDir(filepath.Dir(thumbDest)); err != nil {
+						return err
+					}
+					return publishImageThumbnailFn(sessionAssetPath, thumbDest)
+				})
+			}
+		}
+	}
+	return tasks
+}
+
+func runPublishTasks(tasks []func() error) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if workerCount > len(tasks) {
+		workerCount = len(tasks)
+	}
+
+	jobs := make(chan func() error)
+	done := make(chan struct{})
+	errCh := make(chan error, 1)
+	var once sync.Once
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			case task, ok := <-jobs:
+				if !ok {
+					return
+				}
+				if err := task(); err != nil {
+					once.Do(func() {
+						errCh <- err
+						close(done)
+					})
+				}
+			}
+		}
+	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+enqueue:
+	for _, task := range tasks {
+		select {
+		case <-done:
+			break enqueue
+		case jobs <- task:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
 }
 
 var publishImagePreviewFn = publishImagePreview
@@ -2134,15 +2259,8 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 		sessionHTML += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">`
 		for _, st := range s.Steps {
 			for _, img := range st.ImageRefs {
-				sessionAssetPath := filepath.Join(siteDir, "session", s.PublishSlug, filepath.FromSlash(publishAssetRelativeURL(st.Slug, img)))
-				thumbURL, thumbDest, err := publishIndexThumbnailOutputPaths(siteDir, s.PublishSlug, st.Slug, img)
+				thumbURL, _, err := publishIndexThumbnailOutputPaths(siteDir, s.PublishSlug, st.Slug, img)
 				if err != nil {
-					return "", err
-				}
-				if err := util.EnsureDir(filepath.Dir(thumbDest)); err != nil {
-					return "", err
-				}
-				if err := publishImageThumbnailFn(sessionAssetPath, thumbDest); err != nil {
 					return "", err
 				}
 				sessionHTML += `<a href="session/` + escapeHTML(s.PublishSlug) + `/index.html"><img src="` + escapeHTML(thumbURL) + `" alt="` + escapeHTML(st.Name) + `" style="display:block;width:72px;height:72px;object-fit:cover;border:1px solid #d2c5b3;background:#efe6da;" /></a>`
@@ -2170,14 +2288,8 @@ func renderPublishSessionHTML(sessionDir, title string, s publishSession, prevSe
 	for _, st := range s.Steps {
 		column := `<section class="step-column"><h2>` + escapeHTML(st.Name) + `</h2><div class="step-images">`
 		for _, img := range st.ImageRefs {
-			relURL, dest, err := publishAssetOutputPaths(sessionDir, st.Slug, img)
+			relURL, _, err := publishAssetOutputPaths(sessionDir, st.Slug, img)
 			if err != nil {
-				return "", err
-			}
-			if err := util.EnsureDir(filepath.Dir(dest)); err != nil {
-				return "", err
-			}
-			if err := publishAssetForHTML(img, dest); err != nil {
 				return "", err
 			}
 			column += `<img src="` + escapeHTML(relURL) + `" alt="` + escapeHTML(st.Name) + `" />`

@@ -2,6 +2,8 @@
   - sg publish now anonymizes subject names in published output by default
   - sg publish --with-subject-names preserves the prior name-based publish output
   - anonymous publish now also rewrites published session folder names and links to `session-N` paths instead of leaking subject-derived session slugs
+- publish is slow
+  - parallelized `sg publish` image derivation work so HTML asset renders and index thumbnails can make progress concurrently
 - session board should render a focus history on the right
   - added a right-hand `Focus History` panel in `sg sessions`
   - it lists recent recorded focus windows for open sessions newest-first with session name and start/stop times

@@ -643,7 +643,8 @@ All criteria below are pass/fail requirements for v1.
 7. If complete, study status is not downgraded to `WIP`.
 8. If `protocol.sg.md` cannot be parsed, `sg publish` fails instead of silently rendering an empty protocol.
 9. `sg publish` reuses previously rendered HTML image assets when the publish output is already up to date, and does not re-render unchanged HEIC/HEIF previews.
-10. `sg publish --with-subject-names` preserves the real subject-name behavior in both HTML and PDF outputs.
+10. `sg publish` processes publish-image derivations concurrently so multiple HTML asset renders and index thumbnail renders can make progress in the same run.
+11. `sg publish --with-subject-names` preserves the real subject-name behavior in both HTML and PDF outputs.
 
 ### H. Data Integrity and Safety
 1. Commands modify only files they are responsible for.

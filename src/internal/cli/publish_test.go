@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"study-guide/src/internal/store"
 	"study-guide/src/internal/util"
@@ -466,6 +467,103 @@ func TestRunPublish_RendersHEICAssetsAsJPEGPreviews(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "publish", "site", "session", "session-1", "assets", "01-step-one", "one.jpg")); err != nil {
 		t.Fatalf("expected JPEG preview output, stat error: %v", err)
+	}
+}
+
+func TestRunPublish_StartsMultipleHEICPreviewRendersBeforeTheFirstFinishes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubPublishThumbnailFn(t)
+
+	origPreview := publishImagePreviewFn
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	publishImagePreviewFn = func(src, dst string) error {
+		if err := util.EnsureDir(filepath.Dir(dst)); err != nil {
+			return err
+		}
+		started <- filepath.Base(src)
+		<-release
+		return os.WriteFile(dst, []byte("jpg-preview"), 0o644)
+	}
+	t.Cleanup(func() {
+		publishImagePreviewFn = origPreview
+	})
+
+	root := filepath.Join(t.TempDir(), "study")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nTwo capture steps.\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
+	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
+
+	subject := store.Subject{
+		UUID: "11111111-1111-4111-8111-111111111111",
+		Type: "person",
+		Name: "Alpha Example",
+		Path: filepath.Join(home, ".study-guide", "subject", "alpha-example.sg.md"),
+	}
+	if _, err := store.SaveSubject(subject); err != nil {
+		t.Fatalf("SaveSubject error: %v", err)
+	}
+
+	sessionSlug := "01-01-2026-example"
+	sessionPath := filepath.Join(root, "session", sessionSlug, "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(sessionPath)); err != nil {
+		t.Fatalf("EnsureDir session error: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(sessionPath, map[string]any{}, "# Subjects\n\nAlpha Example (11111111-1111-4111-8111-111111111111)\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile session error: %v", err)
+	}
+	mustWriteStepFile(t, filepath.Join(root, "session", sessionSlug, "step", "01-step-one", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", sessionSlug, "step", "02-step-two", "step.sg.md"), map[string]any{
+		"time_started":  "10:20:00 01-01-2026",
+		"time_finished": "10:30:00 01-01-2026",
+	}, "")
+	mustWriteFile(t, filepath.Join(root, "session", sessionSlug, "step", "01-step-one", "asset", "one.heic"), "heic-1")
+	mustWriteFile(t, filepath.Join(root, "session", sessionSlug, "step", "02-step-two", "asset", "two.heic"), "heic-2")
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	runDone := make(chan int, 1)
+	go func() {
+		runDone <- Run([]string{"publish"})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("timed out waiting for first HEIC preview render to start")
+	}
+
+	startedSecond := false
+	select {
+	case <-started:
+		startedSecond = true
+	case <-time.After(250 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case code := <-runDone:
+		if code != 0 {
+			t.Fatalf("Run(publish) code=%d want=0", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for publish to finish")
+	}
+
+	if !startedSecond {
+		t.Fatalf("expected publish to start a second HEIC preview render before the first finished")
 	}
 }
 
