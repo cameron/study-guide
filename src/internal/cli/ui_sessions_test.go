@@ -390,6 +390,47 @@ func TestSessionsUI_FocusedSessionPinnedToTop(t *testing.T) {
 	}
 }
 
+func TestSessionsUI_CompletedSessionsRemainVisibleGreyAndSortedLast(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:              sessionsViewBrowse,
+		activeSessionSlug: "s2",
+		filter:            newSessionsFilterInput(),
+		table: table.New(
+			table.WithColumns(testSessionsBrowseColumns()),
+			table.WithHeight(5),
+		),
+		browseRecords: []sessionRecord{
+			{Slug: "s1", SubjectNames: []string{"Alpha"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3},
+			{Slug: "s2", SubjectNames: []string{"Beta"}, NextStep: "Second", ProgressSteps: 1, StepCount: 3, Active: true},
+			{Slug: "s3", SubjectNames: []string{"Gamma"}, CurrentStep: "Third", ProgressSteps: 3, StepCount: 3, Complete: true},
+		},
+	}
+
+	m.applyBrowseEntries()
+	rows := m.table.Rows()
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows including completed session, got %d", len(rows))
+	}
+	if stripANSI(rows[0][0]) != "Beta" {
+		t.Fatalf("expected focused incomplete session first, got %q", rows[0][0])
+	}
+	if stripANSI(rows[1][0]) != "Alpha" {
+		t.Fatalf("expected remaining incomplete session before completed rows, got %q", rows[1][0])
+	}
+	if stripANSI(rows[2][0]) != "Gamma" {
+		t.Fatalf("expected completed session at bottom, got %q", rows[2][0])
+	}
+	if !strings.Contains(rows[2][0], "\x1b[") {
+		t.Fatalf("expected completed session row to include ANSI styling, got %q", rows[2][0])
+	}
+	if strings.Contains(rows[1][0], "\x1b[") {
+		t.Fatalf("expected incomplete non-focused row to remain unstyled, got %q", rows[1][0])
+	}
+	if m.table.Cursor() != 0 {
+		t.Fatalf("expected focused top row to remain selected, got cursor %d", m.table.Cursor())
+	}
+}
+
 func TestSessionsUI_FocusedRowUsesDistinctANSIStyling(t *testing.T) {
 	m := sessionsSwitchboardModel{
 		view:   sessionsViewBrowse,
@@ -470,6 +511,125 @@ func TestSessionsUI_View_LayoutOmitsSessionStateMessageLine(t *testing.T) {
 	out := stripANSI(m.View().Content)
 	if strings.Contains(out, "session=s-focused state=advanced step=ground") {
 		t.Fatalf("did not expect session state message line in browse output:\n%s", out)
+	}
+}
+
+func TestSessionsUI_View_ShowsFocusHistorySidebarNewestFirst(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
+
+	alphaPath := filepath.Join(root, "session", "01-01-2026-alpha", "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(alphaPath)); err != nil {
+		t.Fatalf("EnsureDir alpha session failed: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(alphaPath, map[string]any{}, "# Subjects\n\nAlpha Example\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile alpha session failed: %v", err)
+	}
+	mustWriteStepFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:01:00 01-01-2026", "time_finished": "10:05:00 01-01-2026"},
+		},
+	}, "")
+
+	bravoPath := filepath.Join(root, "session", "01-01-2026-bravo", "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(bravoPath)); err != nil {
+		t.Fatalf("EnsureDir bravo session failed: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(bravoPath, map[string]any{}, "# Subjects\n\nBravo Sample\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile bravo session failed: %v", err)
+	}
+	mustWriteStepFile(t, filepath.Join(root, "session", "01-01-2026-bravo", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:06:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:06:00 01-01-2026", "time_finished": "10:07:00 01-01-2026"},
+		},
+	}, "")
+
+	m, err := newSessionsSwitchboardModel(root, protocol)
+	if err != nil {
+		t.Fatalf("newSessionsSwitchboardModel error: %v", err)
+	}
+	m.width = 140
+	m.applyBrowseTableLayout()
+
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "Focus History") {
+		t.Fatalf("expected focus history sidebar title, got:\n%s", out)
+	}
+	for _, want := range []string{
+		"Bravo Sample",
+		"1. First Step",
+		"10:06:00 01-01-2026",
+		"10:07:00 01-01-2026",
+		"Alpha Example",
+		"1. First Step",
+		"10:01:00 01-01-2026",
+		"10:05:00 01-01-2026",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in browse output, got:\n%s", want, out)
+		}
+	}
+	panel := stripANSI(m.renderFocusHistoryPanel())
+	if strings.Index(panel, "Bravo Sample") > strings.Index(panel, "Alpha Example") {
+		t.Fatalf("expected newest focus window first, got:\n%s", out)
+	}
+}
+
+func TestSessionsUI_View_ShowsFocusHistoryForCompletedSessions(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))
+	protocol := testProtocol()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: concluded\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
+
+	sessionPath := filepath.Join(root, "session", "01-01-2026-alpha", "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(sessionPath)); err != nil {
+		t.Fatalf("EnsureDir session failed: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(sessionPath, map[string]any{}, "# Subjects\n\nAlpha Example\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile session failed: %v", err)
+	}
+	mustWriteStepFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started":  "10:01:00 01-01-2026",
+		"time_finished": "10:05:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:01:00 01-01-2026", "time_finished": "10:05:00 01-01-2026"},
+		},
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "second-step", "step.sg.md"), map[string]any{
+		"time_started":  "10:06:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:06:00 01-01-2026", "time_finished": "10:10:00 01-01-2026"},
+		},
+	}, "")
+
+	m, err := newSessionsSwitchboardModel(root, protocol)
+	if err != nil {
+		t.Fatalf("newSessionsSwitchboardModel error: %v", err)
+	}
+	m.width = 140
+	m.applyBrowseTableLayout()
+
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "Focus History") {
+		t.Fatalf("expected focus history sidebar title, got:\n%s", out)
+	}
+	if strings.Contains(out, "no focus history") {
+		t.Fatalf("did not expect empty focus history for completed session data, got:\n%s", out)
+	}
+	for _, want := range []string{
+		"Alpha Example",
+		"2. Second Step",
+		"10:06:00 01-01-2026",
+		"10:10:00 01-01-2026",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in browse output, got:\n%s", want, out)
+		}
 	}
 }
 

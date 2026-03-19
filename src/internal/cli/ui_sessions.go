@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/table"
@@ -54,6 +56,7 @@ type sessionsSwitchboardModel struct {
 
 	browseRecords []sessionRecord
 	browseEntries []browseEntry
+	focusHistory  []focusHistoryEntry
 
 	createLookup           map[string]string
 	activeSessionSlug      string
@@ -82,6 +85,16 @@ const sessionsBrowseTitleKeyHint = "[enter] next step // [ctrl+b] step backwards
 const sessionsCreateItemIndent = "  "
 const sessionsCreateActionCreateSubject = "(+) New subject"
 const sessionsCreateActionCreateSession = "-> Create Session"
+const sessionsFocusHistoryPanelWidth = 46
+const sessionsBrowsePanelGap = 2
+
+type focusHistoryEntry struct {
+	SessionName  string
+	StepNumber   int
+	StepName     string
+	TimeStarted  string
+	TimeFinished string
+}
 
 func sessionsNextStepTextStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
@@ -187,6 +200,10 @@ func focusedBrowseRowCellStyle() lipgloss.Style {
 		Light: color.RGBA{R: 0xf7, G: 0xfc, B: 0xf8, A: 0xff},
 		Dark:  color.RGBA{R: 0x16, G: 0x1d, B: 0x17, A: 0xff},
 	})
+}
+
+func completedBrowseRowCellStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 }
 
 func runSessionsSwitchboard(root string, protocol store.Protocol) error {
@@ -382,7 +399,7 @@ func (m sessionsSwitchboardModel) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(m.filter.View())
 	b.WriteString("\n")
-	b.WriteString(m.table.View())
+	b.WriteString(m.renderBrowseBody())
 	return tea.NewView(b.String())
 }
 
@@ -576,10 +593,13 @@ func (m *sessionsSwitchboardModel) refreshBrowseList() error {
 	m.browseRecords = m.browseRecords[:0]
 	for _, r := range records {
 		r.Active = r.Slug == activeSlug
-		if !r.Complete {
-			m.browseRecords = append(m.browseRecords, r)
-		}
+		m.browseRecords = append(m.browseRecords, r)
 	}
+	history, err := loadFocusHistoryEntries(m.root, m.protocol, m.browseRecords)
+	if err != nil {
+		return err
+	}
+	m.focusHistory = history
 	m.filter.Focus()
 	m.applyBrowseEntries()
 	return nil
@@ -607,7 +627,7 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 	if m.activeSessionSlug != "" && len(filtered) > 1 {
 		focusedIdx := -1
 		for i := range filtered {
-			if filtered[i].Slug == m.activeSessionSlug {
+			if filtered[i].Slug == m.activeSessionSlug && !filtered[i].Complete {
 				focusedIdx = i
 				break
 			}
@@ -650,7 +670,7 @@ func (m *sessionsSwitchboardModel) applyBrowseEntries() {
 }
 
 func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
-	total := max(m.width, 60)
+	total := m.browseTableWidth()
 	// Fit columns to viewport while preserving readability.
 	const (
 		overhead = 8
@@ -700,6 +720,21 @@ func (m *sessionsSwitchboardModel) applyBrowseTableLayout() {
 	m.table.SetWidth(total)
 }
 
+func (m sessionsSwitchboardModel) browseTableWidth() int {
+	total := max(m.width, 60)
+	if total >= 100 {
+		tableWidth := total - sessionsFocusHistoryPanelWidth - sessionsBrowsePanelGap
+		if tableWidth >= 60 {
+			return tableWidth
+		}
+	}
+	return total
+}
+
+func (m sessionsSwitchboardModel) showFocusHistoryPanel() bool {
+	return m.width >= 100 && m.browseTableWidth()+sessionsFocusHistoryPanelWidth+sessionsBrowsePanelGap <= m.width
+}
+
 func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string, string) {
 	switch e.kind {
 	case browseEntryEmpty:
@@ -735,6 +770,12 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if strings.TrimSpace(next) == "" {
 			next = "-"
 		}
+		if rec.Complete {
+			style := completedBrowseRowCellStyle()
+			subjectText = style.Render(subjectText)
+			stepText = style.Render(stepText)
+			next = style.Render(next)
+		}
 		if rec.Active {
 			style := focusedBrowseRowCellStyle()
 			subjectText = style.Render(subjectText)
@@ -745,6 +786,103 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 	default:
 		return "", "", ""
 	}
+}
+
+func (m sessionsSwitchboardModel) renderBrowseBody() string {
+	tableView := m.table.View()
+	if !m.showFocusHistoryPanel() {
+		return tableView
+	}
+	left := lipgloss.NewStyle().Width(m.browseTableWidth()).Render(tableView)
+	right := lipgloss.NewStyle().Width(sessionsFocusHistoryPanelWidth).Render(m.renderFocusHistoryPanel())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", sessionsBrowsePanelGap), right)
+}
+
+func (m sessionsSwitchboardModel) renderFocusHistoryPanel() string {
+	var b strings.Builder
+	b.WriteString("Focus History")
+	if len(m.focusHistory) == 0 {
+		b.WriteString("\n")
+		b.WriteString(subtleTextStyle.Render("no focus history"))
+		return b.String()
+	}
+	for _, entry := range m.focusHistory {
+		b.WriteString("\n")
+		b.WriteString(entry.SessionName)
+		b.WriteString("\n")
+		b.WriteString(subtleTextStyle.Render(renderFocusHistoryStep(entry)))
+		b.WriteString("\n")
+		b.WriteString(subtleTextStyle.Render(renderFocusHistoryTimes(entry)))
+	}
+	return b.String()
+}
+
+func renderFocusHistoryStep(entry focusHistoryEntry) string {
+	label := strings.TrimSpace(entry.StepName)
+	if label == "" {
+		label = "step"
+	}
+	if entry.StepNumber > 0 {
+		return fmt.Sprintf("%d. %s", entry.StepNumber, label)
+	}
+	return label
+}
+
+func renderFocusHistoryTimes(entry focusHistoryEntry) string {
+	end := strings.TrimSpace(entry.TimeFinished)
+	if end == "" {
+		end = "active"
+	}
+	return strings.TrimSpace(entry.TimeStarted) + " -> " + end
+}
+
+func loadFocusHistoryEntries(root string, protocol store.Protocol, records []sessionRecord) ([]focusHistoryEntry, error) {
+	entries := make([]focusHistoryEntry, 0)
+	for _, rec := range records {
+		sessionName := strings.Join(nonEmptySubjects(rec.SubjectNames), ", ")
+		if strings.TrimSpace(sessionName) == "" {
+			sessionName = rec.Slug
+		}
+		for idx, step := range protocol.Steps {
+			stepPath := filepath.Join(root, "session", rec.Slug, "step", step.Slug, "step.sg.md")
+			fm, _, err := util.ReadFrontmatterFile(stepPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			for _, window := range decodeFocusWindows(fm["focus_windows"]) {
+				entries = append(entries, focusHistoryEntry{
+					SessionName:  sessionName,
+					StepNumber:   idx + 1,
+					StepName:     step.Name,
+					TimeStarted:  window.TimeStarted,
+					TimeFinished: window.TimeFinished,
+				})
+			}
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		ti := focusHistorySortKey(entries[i])
+		tj := focusHistorySortKey(entries[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		if entries[i].SessionName != entries[j].SessionName {
+			return entries[i].SessionName < entries[j].SessionName
+		}
+		return entries[i].StepName < entries[j].StepName
+	})
+	return entries, nil
+}
+
+func focusHistorySortKey(entry focusHistoryEntry) time.Time {
+	if ts, err := util.ParseTimestamp(strings.TrimSpace(entry.TimeFinished)); err == nil {
+		return ts
+	}
+	ts, _ := util.ParseTimestamp(strings.TrimSpace(entry.TimeStarted))
+	return ts
 }
 
 func (m sessionsSwitchboardModel) selectedBrowseEntry() (browseEntry, bool) {

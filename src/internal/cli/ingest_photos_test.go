@@ -574,6 +574,49 @@ func TestCmdIngestPhotos_WarnsAndContinuesPastInvalidSessions(t *testing.T) {
 	assertAssetCount(t, studyRoot, "18-02-2026-boehmer-copy", 7)
 }
 
+func TestCmdIngestPhotos_WarnsWhenLatestAvailableAssetPredatesLatestFocusWindow(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-complete"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
+
+	assetsDir := filepath.Join(tmp, "assets")
+	mustWriteFile(t, filepath.Join(assetsDir, "first-a.jpg"), "alpha-photo")
+
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		if filepath.Base(path) != "first-a.jpg" {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, "23:25:33 18-02-2026"), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	out := captureStdout(t, func() {
+		if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+			t.Fatalf("cmdIngestPhotos error: %v", err)
+		}
+	})
+	out = strings.ReplaceAll(out, "\r\n", "\n")
+
+	want := "warning: latest available asset capture time 23:25:33 18-02-2026 is older than latest focus window end 00:05:00 19-02-2026; source sync may be incomplete"
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected incomplete-sync warning %q, got:\n%s", want, out)
+	}
+	if !strings.Contains(out, "session 18-02-2026-boehmer: copied=1") {
+		t.Fatalf("expected ingest to continue, got:\n%s", out)
+	}
+}
+
 func TestCmdIngestPhotos_StudyCompleteFixture_FromAssetsDir(t *testing.T) {
 	tmp := t.TempDir()
 	studyRoot := filepath.Join(tmp, "study")

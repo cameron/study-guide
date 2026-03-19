@@ -4,12 +4,17 @@
   - support multiple formats
     - # Steps / ## step / description
     - # Steps / - step: description / ...
+  - substeps?? e.g., sample @ 200x, 400x, etc
 - web ui instead of CLI?
   - could show subject photos to make sessions easier to differentiate
   - sessions published anonymously
   - subject key decrypts subject name (so you can send a link to the paper to a subject
     and they can see their own data)
-- subject intake
+- subject intake (web)
+  - fields (name, contact, etc)
   - introduction to the study
-  - information release
-  - thanks
+  - permission to publish anonymous data
+  - thanks preference
+- session board offers a way to add notes
+  - session notes
+  - step notes

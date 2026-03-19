@@ -2,6 +2,9 @@
   - sg publish now anonymizes subject names in published output by default
   - sg publish --with-subject-names preserves the prior name-based publish output
   - anonymous publish now also rewrites published session folder names and links to `session-N` paths instead of leaking subject-derived session slugs
+- session board should render a focus history on the right
+  - added a right-hand `Focus History` panel in `sg sessions`
+  - it lists recent recorded focus windows for open sessions newest-first with session name and start/stop times
 - open assets folders from session board
 - session board header highlight should only include the title, not the kb shortcut key
 - session table simplification
@@ -17,3 +20,10 @@
   - default behavior should be to print current study subjects (unless not in a study)
   - add `--all` flag to allow printing all
 - enable regeneration of step folder names if protocol step names change
+- session board
+  - completed sessions remain visible and selectable in `sg sessions`
+  - completed rows render in grey text and stay sorted below incomplete sessions
+  - focus history continues to show only open sessions
+- sg data ingest
+  - possible incomplete sync warning
+    - warns when the latest available asset capture time is older than the study's latest focus window end

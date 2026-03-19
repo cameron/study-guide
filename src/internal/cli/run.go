@@ -2638,6 +2638,13 @@ func cmdIngestPhotos(args []string) error {
 	if err != nil {
 		return err
 	}
+	if latestCapture, ok := latestCapturedAssetTime(capturedAssets); ok && latestCapture.Before(globalEnd) {
+		fmt.Printf(
+			"warning: latest available asset capture time %s is older than latest focus window end %s; source sync may be incomplete\n",
+			latestCapture.Format(util.TimestampLayout),
+			globalEnd.Format(util.TimestampLayout),
+		)
+	}
 	for _, plan := range plans {
 		stats, err := ingestCapturedAssetsForSession(plan.sessionDir, plan.windows, capturedAssets, func(msg string, a ...any) {
 			fmt.Printf("session=%s ", plan.slug)
@@ -2982,6 +2989,22 @@ func buildCapturedAssets(sources []string, captureTimeFn func(string) (time.Time
 		})
 	}
 	return dedupeCapturedAssetsByCaptureInstant(out), nil
+}
+
+func latestCapturedAssetTime(assets []capturedAsset) (time.Time, bool) {
+	var latest time.Time
+	for _, asset := range assets {
+		if asset.exifErr != nil {
+			continue
+		}
+		if latest.IsZero() || asset.captureTime.After(latest) {
+			latest = asset.captureTime
+		}
+	}
+	if latest.IsZero() {
+		return time.Time{}, false
+	}
+	return latest, true
 }
 
 func dedupeCapturedAssetsByCaptureInstant(assets []capturedAsset) []capturedAsset {

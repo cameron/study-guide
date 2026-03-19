@@ -276,7 +276,8 @@ Note: for session progression, a step may be treated as effectively finished whe
 Interactive session switchboard for running multiple sessions in parallel from one terminal.
 
 Behavior:
-1. Shows only incomplete sessions.
+1. Shows both incomplete and completed sessions.
+   Completed sessions remain selectable, are rendered in grey text, and are sorted below all incomplete sessions.
 2. Provides an autocomplete query over subject name and session slug.
 3. Browse table columns are ordered: `SUBJECT | CURRENT STEP | NEXT STEP`.
 4. The selected row (default top row) is the row that keyboard actions apply to.
@@ -311,7 +312,8 @@ Behavior:
 16. Browse layout order is:
 - `Sessions` title line with inline key legend rendered on the same line in the format `[key] description // [key] description // ...`
 - filter input (` filter: ` prompt)
-- open-sessions table (headers + body)
+- browse body with the open-sessions table on the left and a `Focus History` panel on the right
+  The `Focus History` panel lists recent step `focus_windows` across all sessions, including concluded sessions, newest first, and each entry includes the session name, protocol step number/name, and the window start/stop times.
    Filter inputs (browse + shared create picker) use a distinct accent style:
    prompt color uses the same adaptive blue as title bars (`#78f0ff` light, `#1490a0` dark), query text ANSI `212` (pink), placeholder ANSI `245` (dim).
 17. Focused session row is always pinned to the top of the open-sessions list.
@@ -408,6 +410,7 @@ Rules:
 - deterministic output filename: `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`
 - in default Photos SQLite mode, candidate selection groups variants by logical Photos master asset id and keeps only the newest row by metadata modification/create time (so edited/rotated variants win over older originals)
 - before step matching, captured candidates that share the same sub-second EXIF capture instant are deduplicated; Photos render candidates (`resources/renders`) are preferred over non-render variants, then newest file modification time breaks ties
+- if the latest available asset capture time is older than the study's latest focus-window `time_finished`, ingestion prints an incomplete-sync warning and continues
 - duplicate handling: skip if same content already exists in target session
 - idempotent: re-running ingestion should not duplicate copied assets
 - prints per-session counts and one aggregate summary line
