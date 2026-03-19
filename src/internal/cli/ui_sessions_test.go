@@ -40,6 +40,14 @@ func TestSessionsUI_SelectedRowStyle_UsesDefaultPinkWithoutBackgroundTint(t *tes
 	}
 }
 
+func TestSessionsUI_FocusedBrowseRowStyle_UsesVeryLightGreenWash(t *testing.T) {
+	bg := focusedBrowseRowCellStyle().GetBackground()
+	r, g, b, a := bg.RGBA()
+	if r != 0x1616 || g != 0x1d1d || b != 0x1717 || a != 0xffff {
+		t.Fatalf("expected very light green wash, got rgba=(%#04x,%#04x,%#04x,%#04x)", r, g, b, a)
+	}
+}
+
 func TestSessionsUI_FilterInputDefaults(t *testing.T) {
 	fi := newSessionsFilterInput()
 	if fi.Prompt != " filter: " {

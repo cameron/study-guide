@@ -184,8 +184,8 @@ func sessionsSelectedRowStyle(base lipgloss.Style) lipgloss.Style {
 
 func focusedBrowseRowCellStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(compat.AdaptiveColor{
-		Light: color.RGBA{R: 0xed, G: 0xf5, B: 0xee, A: 0xff},
-		Dark:  color.RGBA{R: 0x1f, G: 0x29, B: 0x20, A: 0xff},
+		Light: color.RGBA{R: 0xf7, G: 0xfc, B: 0xf8, A: 0xff},
+		Dark:  color.RGBA{R: 0x16, G: 0x1d, B: 0x17, A: 0xff},
 	})
 }
 
@@ -820,7 +820,7 @@ func (m sessionsSwitchboardModel) publishStudy() error {
 	if m.publishFunc != nil {
 		return m.publishFunc(m.root)
 	}
-	return cmdPublishAtRoot(m.root)
+	return cmdPublishAtRoot(m.root, publishOptions{})
 }
 
 func (m sessionsSwitchboardModel) selectedSessionAssetPath(rec sessionRecord) (string, error) {

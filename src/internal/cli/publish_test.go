@@ -24,7 +24,7 @@ func stubPublishThumbnailFn(t *testing.T) {
 	})
 }
 
-func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
+func TestRunPublish_GeneratesSessionComparisonPageWithAnonymizedSubjectsByDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stubPublishThumbnailFn(t)
@@ -100,11 +100,14 @@ func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile %s error: %v", indexPath, err)
 	}
-	if !strings.Contains(string(indexHTML), `session/01-01-2026-example/index.html`) {
-		t.Fatalf("expected publish index to link to session page, got:\n%s", string(indexHTML))
+	if strings.Contains(string(indexHTML), `session/01-01-2026-example/index.html`) {
+		t.Fatalf("expected anonymous publish index to avoid subject-derived session slug, got:\n%s", string(indexHTML))
 	}
-	if !strings.Contains(string(indexHTML), `<h3><a href="session/01-01-2026-example/index.html">Alpha Example</a></h3>`) {
-		t.Fatalf("expected publish index session title to link with full single-subject name, got:\n%s", string(indexHTML))
+	if !strings.Contains(string(indexHTML), `session/session-1/index.html`) {
+		t.Fatalf("expected publish index to link to anonymized session page, got:\n%s", string(indexHTML))
+	}
+	if !strings.Contains(string(indexHTML), `<h3><a href="session/session-1/index.html">Subject 1</a></h3>`) {
+		t.Fatalf("expected publish index session title to use anonymized subject label by default, got:\n%s", string(indexHTML))
 	}
 	for _, unwanted := range []string{
 		"Started: 10:00:00 01-01-2026",
@@ -118,14 +121,14 @@ func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
 		}
 	}
 
-	sessionPagePath := filepath.Join(root, "publish", "site", "session", sessionSlug, "index.html")
+	sessionPagePath := filepath.Join(root, "publish", "site", "session", "session-1", "index.html")
 	sessionHTML, err := os.ReadFile(sessionPagePath)
 	if err != nil {
 		t.Fatalf("ReadFile %s error: %v", sessionPagePath, err)
 	}
 	page := string(sessionHTML)
 	for _, want := range []string{
-		"Alpha Example",
+		"Subject 1",
 		"01-01-2026",
 		"Step One",
 		"Step Two",
@@ -193,30 +196,30 @@ func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
 			t.Fatalf("expected session page to omit %q, got:\n%s", unwanted, page)
 		}
 	}
-	if !strings.Contains(page, `class="header-link" href="../../index.html">Up</a><span class="session-nav"><span class="header-sep">|</span><a class="session-link next-session-link" href="../02-01-2026-example/index.html">Next</a></span><span class="header-sep">|</span><span class="header-date">01-01-2026</span><span class="header-sep">|</span><span class="header-subject">Alpha Example</span>`) {
+	if !strings.Contains(page, `class="header-link" href="../../index.html">Up</a><span class="session-nav"><span class="header-sep">|</span><a class="session-link next-session-link" href="../session-2/index.html">Next</a></span><span class="header-sep">|</span><span class="header-date">01-01-2026</span><span class="header-sep">|</span><span class="header-subject">Subject 1</span>`) {
 		t.Fatalf("expected compact one-line header order, got:\n%s", page)
 	}
 	if strings.Contains(page, `<button type="button">Up</button>`) {
 		t.Fatalf("expected back control to remain a link, got:\n%s", page)
 	}
-	if !strings.Contains(page, `href="../02-01-2026-example/index.html"`) {
+	if !strings.Contains(page, `href="../session-2/index.html"`) {
 		t.Fatalf("expected next session link, got:\n%s", page)
 	}
-	nextSessionPagePath := filepath.Join(root, "publish", "site", "session", nextSessionSlug, "index.html")
+	nextSessionPagePath := filepath.Join(root, "publish", "site", "session", "session-2", "index.html")
 	nextSessionHTML, err := os.ReadFile(nextSessionPagePath)
 	if err != nil {
 		t.Fatalf("ReadFile %s error: %v", nextSessionPagePath, err)
 	}
-	if !strings.Contains(string(nextSessionHTML), `href="../01-01-2026-example/index.html"`) {
+	if !strings.Contains(string(nextSessionHTML), `href="../session-1/index.html"`) {
 		t.Fatalf("expected previous session link on second session page, got:\n%s", string(nextSessionHTML))
 	}
-	firstThumb := strings.Index(string(indexHTML), "session/01-01-2026-example/assets/01-step-one/one.jpg")
-	secondThumb := strings.Index(string(indexHTML), "session/01-01-2026-example/assets/02-step-two/two.jpg")
+	firstThumb := strings.Index(string(indexHTML), "session/session-1/assets/01-step-one/one.jpg")
+	secondThumb := strings.Index(string(indexHTML), "session/session-1/assets/02-step-two/two.jpg")
 	if firstThumb >= 0 || secondThumb >= 0 {
 		t.Fatalf("expected publish index to avoid full-size session asset paths, got:\n%s", string(indexHTML))
 	}
-	firstThumb = strings.Index(string(indexHTML), "thumbs/01-01-2026-example/01-step-one/one.jpg")
-	secondThumb = strings.Index(string(indexHTML), "thumbs/01-01-2026-example/02-step-two/two.jpg")
+	firstThumb = strings.Index(string(indexHTML), "thumbs/session-1/01-step-one/one.jpg")
+	secondThumb = strings.Index(string(indexHTML), "thumbs/session-1/02-step-two/two.jpg")
 	if firstThumb < 0 || secondThumb < 0 {
 		t.Fatalf("expected publish index to include chrono-ordered thumbnails, got:\n%s", string(indexHTML))
 	}
@@ -224,8 +227,8 @@ func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
 		t.Fatalf("expected publish index thumbnails in chronological order, got:\n%s", string(indexHTML))
 	}
 	for _, thumbPath := range []string{
-		filepath.Join(root, "publish", "site", "thumbs", "01-01-2026-example", "01-step-one", "one.jpg"),
-		filepath.Join(root, "publish", "site", "thumbs", "01-01-2026-example", "02-step-two", "two.jpg"),
+		filepath.Join(root, "publish", "site", "thumbs", "session-1", "01-step-one", "one.jpg"),
+		filepath.Join(root, "publish", "site", "thumbs", "session-1", "02-step-two", "two.jpg"),
 	} {
 		if _, err := os.Stat(thumbPath); err != nil {
 			t.Fatalf("expected published thumbnail %s, stat error: %v", thumbPath, err)
@@ -233,7 +236,7 @@ func TestRunPublish_GeneratesSessionComparisonPage(t *testing.T) {
 	}
 }
 
-func TestRunPublish_SessionListUsesLastNamesForMultiSubjectTitles(t *testing.T) {
+func TestRunPublish_SessionListUsesAnonymizedLabelsByDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stubPublishThumbnailFn(t)
@@ -294,9 +297,88 @@ func TestRunPublish_SessionListUsesLastNamesForMultiSubjectTitles(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ReadFile %s error: %v", indexPath, err)
 	}
-	if !strings.Contains(string(indexHTML), `<h3><a href="session/01-01-2026-example-sample/index.html">Example, Sample</a></h3>`) {
-		t.Fatalf("expected publish index multi-subject title to use last names, got:\n%s", string(indexHTML))
+	if strings.Contains(string(indexHTML), `session/01-01-2026-example-sample/index.html`) {
+		t.Fatalf("expected anonymous publish list to avoid subject-derived session slug, got:\n%s", string(indexHTML))
 	}
+	if !strings.Contains(string(indexHTML), `<h3><a href="session/session-1/index.html">Subject 1, Subject 2</a></h3>`) {
+		t.Fatalf("expected publish index multi-subject title to use anonymized labels by default, got:\n%s", string(indexHTML))
+	}
+}
+
+func TestRunPublish_WithSubjectNamesFlagPreservesSubjectNames(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stubPublishThumbnailFn(t)
+
+	root := filepath.Join(t.TempDir(), "study")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nOne capture step.\n\n# Steps\n\n## Step One\n\n")
+	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
+
+	for _, subject := range []store.Subject{
+		{
+			UUID: "11111111-1111-4111-8111-111111111111",
+			Type: "person",
+			Name: "Alpha Example",
+			Path: filepath.Join(home, ".study-guide", "subject", "alpha-example.sg.md"),
+		},
+		{
+			UUID: "22222222-2222-4222-8222-222222222222",
+			Type: "person",
+			Name: "Bravo Sample",
+			Path: filepath.Join(home, ".study-guide", "subject", "bravo-sample.sg.md"),
+		},
+	} {
+		if _, err := store.SaveSubject(subject); err != nil {
+			t.Fatalf("SaveSubject error: %v", err)
+		}
+	}
+
+	sessionSlug := "01-01-2026-example-sample"
+	sessionPath := filepath.Join(root, "session", sessionSlug, "session.sg.md")
+	if err := util.EnsureDir(filepath.Dir(sessionPath)); err != nil {
+		t.Fatalf("EnsureDir session error: %v", err)
+	}
+	if err := util.WriteFrontmatterFile(sessionPath, map[string]any{}, "# Subjects\n\nAlpha Example (11111111-1111-4111-8111-111111111111)\nBravo Sample (22222222-2222-4222-8222-222222222222)\n"); err != nil {
+		t.Fatalf("WriteFrontmatterFile session error: %v", err)
+	}
+	mustWriteStepFile(t, filepath.Join(root, "session", sessionSlug, "step", "01-step-one", "step.sg.md"), map[string]any{
+		"time_started":  "10:00:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+	}, "")
+	mustWriteFile(t, filepath.Join(root, "session", sessionSlug, "step", "01-step-one", "asset", "one.jpg"), "one")
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if code := Run([]string{"publish", "--with-subject-names"}); code != 0 {
+		t.Fatalf("Run(publish --with-subject-names) code=%d want=0", code)
+	}
+
+	indexPath := filepath.Join(root, "publish", "site", "index.html")
+	indexHTML, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("ReadFile %s error: %v", indexPath, err)
+	}
+	if !strings.Contains(string(indexHTML), `<h3><a href="session/01-01-2026-example-sample/index.html">Example, Sample</a></h3>`) {
+		t.Fatalf("expected publish index multi-subject title to use last names with subject names enabled, got:\n%s", string(indexHTML))
+	}
+
+	sessionPagePath := filepath.Join(root, "publish", "site", "session", sessionSlug, "index.html")
+	sessionHTML, err := os.ReadFile(sessionPagePath)
+	if err != nil {
+		t.Fatalf("ReadFile %s error: %v", sessionPagePath, err)
+	}
+	if !strings.Contains(string(sessionHTML), `<span class="header-subject">Example, Sample</span>`) {
+		t.Fatalf("expected session page header to preserve subject-based display name with flag, got:\n%s", string(sessionHTML))
+	}
+
 }
 
 func TestRunPublish_RendersHEICAssetsAsJPEGPreviews(t *testing.T) {
@@ -370,7 +452,7 @@ func TestRunPublish_RendersHEICAssetsAsJPEGPreviews(t *testing.T) {
 		t.Fatalf("expected cached HEIC preview to be reused on second publish, got %d renders", previewCalls)
 	}
 
-	sessionPagePath := filepath.Join(root, "publish", "site", "session", sessionSlug, "index.html")
+	sessionPagePath := filepath.Join(root, "publish", "site", "session", "session-1", "index.html")
 	sessionHTML, err := os.ReadFile(sessionPagePath)
 	if err != nil {
 		t.Fatalf("ReadFile %s error: %v", sessionPagePath, err)
@@ -382,7 +464,7 @@ func TestRunPublish_RendersHEICAssetsAsJPEGPreviews(t *testing.T) {
 	if strings.Contains(page, "assets/01-step-one/one.heic") {
 		t.Fatalf("expected raw HEIC reference to be replaced, got:\n%s", page)
 	}
-	if _, err := os.Stat(filepath.Join(root, "publish", "site", "session", sessionSlug, "assets", "01-step-one", "one.jpg")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "publish", "site", "session", "session-1", "assets", "01-step-one", "one.jpg")); err != nil {
 		t.Fatalf("expected JPEG preview output, stat error: %v", err)
 	}
 }

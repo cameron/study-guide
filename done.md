@@ -1,3 +1,7 @@
+- anonymize subjects during publish
+  - sg publish now anonymizes subject names in published output by default
+  - sg publish --with-subject-names preserves the prior name-based publish output
+  - anonymous publish now also rewrites published session folder names and links to `session-N` paths instead of leaking subject-derived session slugs
 - open assets folders from session board
 - session board header highlight should only include the title, not the kb shortcut key
 - session table simplification
@@ -7,6 +11,7 @@
   - make "enter" on the focused row advance it
 - subject creation from session creation should create both subject and session
   immediately and return to session board
+- focused top row needs slight bg (very transparent green)
 - remove `sg subject emails`
 - update `sg subject print`
   - default behavior should be to print current study subjects (unless not in a study)

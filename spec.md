@@ -306,7 +306,7 @@ Behavior:
 12. Browse view does not render extra status summary lines above or below the table (except the key-hint footer line). This includes per-action session state/result text (for example `session=<slug> state=...`) which must not be shown in the browse layout.
 13. Browse table selected-row styling uses Bubble's default pink selected text treatment (foreground emphasis).
    This pink selected styling applies to the sessions browse table and create-mode subject list.
-14. The focused session row is visually separated from the other rows with a subtle green treatment that does not rely on inserting a selectable blank row.
+14. The focused session row is visually separated from the other rows with a very light green background wash that does not rely on inserting a selectable blank row.
 15. Browse table column sizing should be responsive to viewport width while prioritizing `CURRENT STEP` readability; on wide viewports use preferred widths `SUBJECT=35`, `CURRENT STEP=48`, and assign remaining width to `NEXT STEP` (minimum `16`).
 16. Browse layout order is:
 - `Sessions` title line with inline key legend rendered on the same line in the format `[key] description // [key] description // ...`
@@ -452,11 +452,15 @@ Default outputs:
 - `<study-root>/publish/site/index.html`
 - `<study-root>/publish/study.pdf`
 
+Flags:
+- `--with-subject-names` preserves real subject names in published outputs
+
 Behavior:
 - best effort (do not fail just because data is incomplete)
 - run status checks first
 - if required sections/steps/fields are missing, set `study.sg.md` frontmatter `status: WIP`
 - include visible `WIP` indicator in generated outputs when incomplete
+- default published outputs anonymize session subjects using deterministic study-wide placeholders (`Subject 1`, `Subject 2`, ...)
 
 ## Publication Structure (v1)
 
@@ -465,8 +469,8 @@ Generated outputs should include:
 - hypotheses, discussion, conclusion
 - protocol summary and steps
 - sessions in chronological order
-- for each session: subjects, step timeline, and associated images
-- the web session list shows only a linked session title and thumbnails; the title is the full subject name when there is one subject, otherwise a comma-separated list of subject last names, and links to that session gallery
+- for each session: anonymized subjects by default, step timeline, and associated images
+- the web session list shows only a linked session title and thumbnails; by default the title is a comma-separated list of anonymized subject labels, and with `--with-subject-names` it uses the full single-subject name or comma-separated subject last names
 
 ## Web Subject Signup (Optional in v1)
 
@@ -602,10 +606,12 @@ All criteria below are pass/fail requirements for v1.
 - hypotheses, discussion, conclusion
 - protocol summary + step list
 - sessions in chronological order, including chrono-ordered thumbnails of photos
+- subject labels are anonymized by default in HTML and PDF outputs using deterministic study-wide placeholders (`Subject 1`, `Subject 2`, ...)
+- when subject names are anonymized, published web session paths/folder names must also be anonymized and must not reuse subject-derived study session slugs
 - index-page thumbnails are published as separate derived image files rather than linking directly to full-size session assets
 - HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
 - page per session
-  - compact single-line toolbar with link back to index, session start date (unlabeled), subject name, and image-size controls
+  - compact single-line toolbar with link back to index, session start date (unlabeled), subject label, and image-size controls
     - navigation controls are normal links labeled `Up`, `Prev`, and `Next`
     - toolbar includes previous/next session links when adjacent sessions exist
     - do not show `WIP` on the session page
@@ -634,6 +640,7 @@ All criteria below are pass/fail requirements for v1.
 7. If complete, study status is not downgraded to `WIP`.
 8. If `protocol.sg.md` cannot be parsed, `sg publish` fails instead of silently rendering an empty protocol.
 9. `sg publish` reuses previously rendered HTML image assets when the publish output is already up to date, and does not re-render unchanged HEIC/HEIF previews.
+10. `sg publish --with-subject-names` preserves the real subject-name behavior in both HTML and PDF outputs.
 
 ### H. Data Integrity and Safety
 1. Commands modify only files they are responsible for.

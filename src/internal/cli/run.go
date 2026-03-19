@@ -58,7 +58,7 @@ func Run(args []string) int {
 	case "status":
 		err = cmdStatus(true)
 	case "publish":
-		err = cmdPublish()
+		err = cmdPublish(args[1:])
 	case "data":
 		err = cmdData(args[1:])
 	case "help", "-h", "--help":
@@ -119,7 +119,7 @@ Commands:
   data ls
   data clean
   status
-  publish`)
+  publish [--with-subject-names]`)
 }
 
 func cmdInit() error {
@@ -1713,15 +1713,23 @@ func collectStatusIssues(root string) ([]string, error) {
 	return issues, nil
 }
 
-func cmdPublish() error {
+type publishOptions struct {
+	WithSubjectNames bool
+}
+
+func cmdPublish(args []string) error {
+	opts, err := parsePublishArgs(args)
+	if err != nil {
+		return err
+	}
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
 		return err
 	}
-	return cmdPublishAtRoot(root)
+	return cmdPublishAtRoot(root, opts)
 }
 
-func cmdPublishAtRoot(root string) error {
+func cmdPublishAtRoot(root string, opts publishOptions) error {
 	issues, err := collectStatusIssues(root)
 	if err != nil {
 		return err
@@ -1756,7 +1764,7 @@ func cmdPublishAtRoot(root string) error {
 		subjectByID[s.UUID] = s
 	}
 
-	sessions, err := loadSessionsForPublish(root, protocol, subjectByID)
+	sessions, err := loadSessionsForPublish(root, protocol, subjectByID, opts)
 	if err != nil {
 		return err
 	}
@@ -1791,7 +1799,7 @@ func cmdPublishAtRoot(root string) error {
 
 func writePublishSessionPages(root, title string, sessions []publishSession, incomplete bool) error {
 	for i, s := range sessions {
-		sessionDir := filepath.Join(root, "publish", "site", "session", s.Slug)
+		sessionDir := filepath.Join(root, "publish", "site", "session", s.PublishSlug)
 		if err := util.EnsureDir(sessionDir); err != nil {
 			return err
 		}
@@ -1826,15 +1834,21 @@ type publishStep struct {
 }
 
 type publishSession struct {
-	Slug       string
-	Started    string
-	Finished   string
-	SubjectIDs []string
-	Subjects   []string
-	Steps      []publishStep
+	Slug        string
+	PublishSlug string
+	Started     string
+	Finished    string
+	SubjectIDs  []string
+	Subjects    []string
+	Steps       []publishStep
 }
 
-func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID map[string]store.Subject) ([]publishSession, error) {
+type publishSubjectRef struct {
+	key  string
+	name string
+}
+
+func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID map[string]store.Subject, opts publishOptions) ([]publishSession, error) {
 	slugList, err := listSessionSlugs(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1843,6 +1857,8 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 		return nil, err
 	}
 	sessions := make([]publishSession, 0, len(slugList))
+	sessionSubjectRefs := map[string][]publishSubjectRef{}
+	subjectKeys := map[string]struct{}{}
 	for _, slug := range slugList {
 		sdir := filepath.Join(root, "session", slug)
 		_, body, err := util.ReadFrontmatterFile(filepath.Join(sdir, "session.sg.md"))
@@ -1852,6 +1868,7 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 		refs := parseSessionSubjects(body)
 		ids := make([]string, 0, len(refs))
 		names := make([]string, 0, len(refs))
+		resolvedRefs := make([]publishSubjectRef, 0, len(refs))
 		for _, ref := range refs {
 			if strings.TrimSpace(ref.ID) != "" {
 				ids = append(ids, ref.ID)
@@ -1863,7 +1880,13 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 			if strings.TrimSpace(name) != "" {
 				names = append(names, name)
 			}
+			key := publishSubjectKey(ref, name)
+			if key != "" {
+				subjectKeys[key] = struct{}{}
+				resolvedRefs = append(resolvedRefs, publishSubjectRef{key: key, name: name})
+			}
 		}
+		sessionSubjectRefs[slug] = resolvedRefs
 		steps := make([]publishStep, 0, len(protocol.Steps))
 		for _, st := range protocol.Steps {
 			stepPath := filepath.Join(sdir, "step", st.Slug, "step.sg.md")
@@ -1890,13 +1913,31 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 			})
 		}
 		sessions = append(sessions, publishSession{
-			Slug:       slug,
-			Started:    earliestPublishStepStart(steps),
-			Finished:   latestPublishStepFinish(steps),
-			SubjectIDs: ids,
-			Subjects:   names,
-			Steps:      steps,
+			Slug:        slug,
+			PublishSlug: slug,
+			Started:     earliestPublishStepStart(steps),
+			Finished:    latestPublishStepFinish(steps),
+			SubjectIDs:  ids,
+			Subjects:    names,
+			Steps:       steps,
 		})
+	}
+	if !opts.WithSubjectNames {
+		labelByKey := anonymizedPublishLabels(subjectKeys)
+		for i := range sessions {
+			refs := sessionSubjectRefs[sessions[i].Slug]
+			labels := make([]string, 0, len(refs))
+			for _, ref := range refs {
+				label := strings.TrimSpace(labelByKey[ref.key])
+				if label == "" {
+					label = ref.name
+				}
+				if strings.TrimSpace(label) != "" {
+					labels = append(labels, label)
+				}
+			}
+			sessions[i].Subjects = labels
+		}
 	}
 	sort.Slice(sessions, func(i, j int) bool {
 		ti, ei := util.ParseTimestamp(sessions[i].Started)
@@ -1906,7 +1947,61 @@ func loadSessionsForPublish(root string, protocol store.Protocol, subjectByID ma
 		}
 		return sessions[i].Slug < sessions[j].Slug
 	})
+	if !opts.WithSubjectNames {
+		for i := range sessions {
+			sessions[i].PublishSlug = fmt.Sprintf("session-%d", i+1)
+		}
+	}
 	return sessions, nil
+}
+
+func parsePublishArgs(args []string) (publishOptions, error) {
+	opts := publishOptions{}
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		if arg == "" {
+			continue
+		}
+		switch arg {
+		case "--with-subject-names":
+			opts.WithSubjectNames = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown flag: %s", arg)
+			}
+			return opts, errors.New("usage: sg publish [--with-subject-names]")
+		}
+	}
+	return opts, nil
+}
+
+func publishSubjectKey(ref sessionSubjectRef, resolvedName string) string {
+	if id := strings.TrimSpace(ref.ID); id != "" {
+		return "id:" + id
+	}
+	name := strings.TrimSpace(resolvedName)
+	if name == "" {
+		name = strings.TrimSpace(ref.Name)
+	}
+	if name == "" {
+		return ""
+	}
+	return "name:" + strings.ToLower(name)
+}
+
+func anonymizedPublishLabels(keys map[string]struct{}) map[string]string {
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		if strings.TrimSpace(key) != "" {
+			ordered = append(ordered, key)
+		}
+	}
+	sort.Strings(ordered)
+	labels := make(map[string]string, len(ordered))
+	for i, key := range ordered {
+		labels[key] = fmt.Sprintf("Subject %d", i+1)
+	}
+	return labels
 }
 
 func earliestPublishStepStart(steps []publishStep) string {
@@ -2035,12 +2130,12 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 	sessionHTML := ""
 	siteDir := filepath.Join(root, "publish", "site")
 	for _, s := range sessions {
-		sessionHTML += `<section><h3><a href="session/` + escapeHTML(s.Slug) + `/index.html">` + escapeHTML(sessionDisplayName(s)) + `</a></h3>`
+		sessionHTML += `<section><h3><a href="session/` + escapeHTML(s.PublishSlug) + `/index.html">` + escapeHTML(sessionDisplayName(s)) + `</a></h3>`
 		sessionHTML += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">`
 		for _, st := range s.Steps {
 			for _, img := range st.ImageRefs {
-				sessionAssetPath := filepath.Join(siteDir, "session", s.Slug, filepath.FromSlash(publishAssetRelativeURL(st.Slug, img)))
-				thumbURL, thumbDest, err := publishIndexThumbnailOutputPaths(siteDir, s.Slug, st.Slug, img)
+				sessionAssetPath := filepath.Join(siteDir, "session", s.PublishSlug, filepath.FromSlash(publishAssetRelativeURL(st.Slug, img)))
+				thumbURL, thumbDest, err := publishIndexThumbnailOutputPaths(siteDir, s.PublishSlug, st.Slug, img)
 				if err != nil {
 					return "", err
 				}
@@ -2050,7 +2145,7 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 				if err := publishImageThumbnailFn(sessionAssetPath, thumbDest); err != nil {
 					return "", err
 				}
-				sessionHTML += `<a href="session/` + escapeHTML(s.Slug) + `/index.html"><img src="` + escapeHTML(thumbURL) + `" alt="` + escapeHTML(st.Name) + `" style="display:block;width:72px;height:72px;object-fit:cover;border:1px solid #d2c5b3;background:#efe6da;" /></a>`
+				sessionHTML += `<a href="session/` + escapeHTML(s.PublishSlug) + `/index.html"><img src="` + escapeHTML(thumbURL) + `" alt="` + escapeHTML(st.Name) + `" style="display:block;width:72px;height:72px;object-fit:cover;border:1px solid #d2c5b3;background:#efe6da;" /></a>`
 			}
 		}
 		sessionHTML += `</div></section>`
@@ -2097,11 +2192,11 @@ func renderPublishSessionHTML(sessionDir, title string, s publishSession, prevSe
 	sessionNav := `<span class="session-nav">`
 	if prevSession != nil {
 		sessionNav += `<span class="header-sep">|</span>`
-		sessionNav += `<a class="session-link prev-session-link" href="../` + escapeHTML(prevSession.Slug) + `/index.html">Prev</a>`
+		sessionNav += `<a class="session-link prev-session-link" href="../` + escapeHTML(prevSession.PublishSlug) + `/index.html">Prev</a>`
 	}
 	if nextSession != nil {
 		sessionNav += `<span class="header-sep">|</span>`
-		sessionNav += `<a class="session-link next-session-link" href="../` + escapeHTML(nextSession.Slug) + `/index.html">Next</a>`
+		sessionNav += `<a class="session-link next-session-link" href="../` + escapeHTML(nextSession.PublishSlug) + `/index.html">Next</a>`
 	}
 	sessionNav += `</span>`
 	return `<!doctype html><html><head><meta charset="utf-8"><title>` + escapeHTML(title) + `</title><style>
@@ -2215,16 +2310,31 @@ func sessionDisplayName(s publishSession) string {
 	subjects := nonEmptySubjects(s.Subjects)
 	switch len(subjects) {
 	case 0:
-		return firstNonEmpty(s.Slug)
+		return firstNonEmpty(s.Slug, s.PublishSlug)
 	case 1:
 		return subjects[0]
 	default:
+		if allAnonymizedPublishSubjects(subjects) {
+			return strings.Join(subjects, ", ")
+		}
 		lastNames := make([]string, 0, len(subjects))
 		for _, subject := range subjects {
 			lastNames = append(lastNames, lastToken(subject))
 		}
 		return strings.Join(lastNames, ", ")
 	}
+}
+
+func allAnonymizedPublishSubjects(subjects []string) bool {
+	if len(subjects) == 0 {
+		return false
+	}
+	for _, subject := range subjects {
+		if !strings.HasPrefix(strings.TrimSpace(subject), "Subject ") {
+			return false
+		}
+	}
+	return true
 }
 
 func nonEmptySubjects(subjects []string) []string {
