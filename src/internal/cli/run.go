@@ -50,6 +50,8 @@ func Run(args []string) int {
 	switch args[0] {
 	case "init":
 		err = cmdInit()
+	case "protocol":
+		err = cmdProtocol(args[1:])
 	case "subject":
 		err = cmdSubject(args[1:])
 	case "session":
@@ -113,6 +115,7 @@ func printHelp() {
 
 Commands:
   init
+  protocol reconcile
   subject create|edit|search|print|ls|rm
   session [advance|reverse [--session <slug>]]
   sessions [print]
@@ -210,7 +213,7 @@ func ensureStudyFile(path, studyName string) error {
 		"status":     "WIP",
 		"created_on": util.NowTimestamp(),
 	}
-	body := fmt.Sprintf("# %s\n\n# Hypotheses\n\n# Discussion\n\n# Conclusion\n\n# Special Thanks\n", studyName)
+	body := fmt.Sprintf("# %s\n\n# Introduction\n\n# Methods\n\n# Results\n\n# Discussion\n\n# Conclusion\n\n# Special Thanks\n", studyName)
 	return util.WriteFrontmatterFile(path, fm, body)
 }
 
@@ -263,6 +266,33 @@ func cmdSubject(args []string) error {
 		return store.RemoveSubject(args[1])
 	default:
 		return fmt.Errorf("unknown subject subcommand: %s", args[0])
+	}
+}
+
+func cmdProtocol(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: sg protocol reconcile")
+	}
+	switch args[0] {
+	case "reconcile":
+		if len(args) > 1 {
+			return fmt.Errorf("unknown argument: %s", args[1])
+		}
+		root, err := util.StudyRootFromCwd()
+		if err != nil {
+			return err
+		}
+		protocol, err := store.ParseProtocol(root)
+		if err != nil {
+			return err
+		}
+		if len(protocol.Steps) == 0 {
+			return errors.New("no protocol steps found")
+		}
+		fmt.Println("reconciled protocol step directories")
+		return nil
+	default:
+		return fmt.Errorf("unknown protocol subcommand: %s", args[0])
 	}
 }
 
@@ -722,6 +752,9 @@ func cmdData(args []string) error {
 func cmdDataLs() error {
 	root, err := util.StudyRootFromCwd()
 	if err != nil {
+		return err
+	}
+	if err := reconcileProtocolStepSlugs(root); err != nil {
 		return err
 	}
 	sessionRoot := filepath.Join(root, "session")
@@ -1661,7 +1694,7 @@ func collectStatusIssues(root string) ([]string, error) {
 	if strings.TrimSpace(store.ExtractStudyTitle(body)) == "" {
 		issues = append(issues, "study.sg.md missing title H1")
 	}
-	for _, sec := range []string{"# Hypotheses", "# Discussion", "# Conclusion"} {
+	for _, sec := range []string{"# Introduction", "# Methods", "# Results", "# Discussion", "# Conclusion"} {
 		if !strings.Contains(body, sec) {
 			issues = append(issues, "study.sg.md missing section: "+sec)
 		}
@@ -2274,10 +2307,11 @@ func renderPublishHTML(root, title string, studyFM map[string]any, studyBody str
 
 	return "<html><body><h1>" + escapeHTML(title) + wipBadge + "</h1>" +
 		studyMeta +
-		"<h2>Hypotheses</h2><pre>" + escapeHTML(extractSection(studyBody, "Hypotheses")) + "</pre>" +
+		"<h2>Introduction</h2><pre>" + escapeHTML(extractSection(studyBody, "Introduction")) + "</pre>" +
+		"<h2>Methods</h2><pre>" + escapeHTML(protocol.Summary) + "</pre>" +
+		"<h2>Results</h2><pre>" + escapeHTML(extractSection(studyBody, "Results")) + "</pre>" +
 		"<h2>Discussion</h2><pre>" + escapeHTML(extractSection(studyBody, "Discussion")) + "</pre>" +
 		"<h2>Conclusion</h2><pre>" + escapeHTML(extractSection(studyBody, "Conclusion")) + "</pre>" +
-		"<h2>Protocol Summary</h2><pre>" + escapeHTML(protocol.Summary) + "</pre>" +
 		"<h2>Protocol Steps</h2><ol>" + protocolSteps + "</ol>" +
 		"<h2>Sessions</h2>" + sessionHTML +
 		"</body></html>", nil
@@ -2596,14 +2630,16 @@ func renderPublishText(title string, studyFM map[string]any, studyBody string, p
 	b.WriteString(asString(studyFM["status"]))
 	b.WriteString("\nCreated: ")
 	b.WriteString(asString(studyFM["created_on"]))
-	b.WriteString("\n\nHypotheses\n")
-	b.WriteString(extractSection(studyBody, "Hypotheses"))
+	b.WriteString("\n\nIntroduction\n")
+	b.WriteString(extractSection(studyBody, "Introduction"))
+	b.WriteString("\n\nMethods\n")
+	b.WriteString(protocol.Summary)
+	b.WriteString("\n\nResults\n")
+	b.WriteString(extractSection(studyBody, "Results"))
 	b.WriteString("\n\nDiscussion\n")
 	b.WriteString(extractSection(studyBody, "Discussion"))
 	b.WriteString("\n\nConclusion\n")
 	b.WriteString(extractSection(studyBody, "Conclusion"))
-	b.WriteString("\n\nProtocol Summary\n")
-	b.WriteString(protocol.Summary)
 	b.WriteString("\n\nProtocol Steps\n")
 	for _, step := range protocol.Steps {
 		b.WriteString("- ")
@@ -2797,6 +2833,9 @@ func cmdDataClean(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := reconcileProtocolStepSlugs(root); err != nil {
+		return err
+	}
 	sessionRoot := filepath.Join(root, "session")
 	removed := 0
 	err = filepath.WalkDir(sessionRoot, func(path string, d fs.DirEntry, walkErr error) error {
@@ -2823,6 +2862,11 @@ func cmdDataClean(args []string) error {
 	}
 	fmt.Printf("removed asset files: %d\n", removed)
 	return nil
+}
+
+func reconcileProtocolStepSlugs(root string) error {
+	_, err := store.ParseProtocol(root)
+	return err
 }
 
 func parseIngestPhotosArgs(args []string) (ingestPhotosOptions, error) {

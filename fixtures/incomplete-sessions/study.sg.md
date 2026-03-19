@@ -6,7 +6,11 @@ active_session_slug: ""
 
 # Incomplete Sessions
 
-# Hypotheses
+# Introduction
+
+# Methods
+
+# Results
 
 # Discussion
 

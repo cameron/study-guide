@@ -22,6 +22,7 @@
   - default behavior should be to print current study subjects (unless not in a study)
   - add `--all` flag to allow printing all
 - enable regeneration of step folder names if protocol step names change
+  - `sg data ls` and `sg data clean` now reconcile renamed ordinal step folder slugs before scanning session assets, so manual protocol step renames are reflected consistently
 - session board
   - completed sessions remain visible and selectable in `sg sessions`
   - completed rows render in grey text and stay sorted below incomplete sessions

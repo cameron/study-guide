@@ -114,7 +114,7 @@ func TestParseProtocolMarkdownRequiresSections(t *testing.T) {
 }
 
 func TestExtractStudyTitle(t *testing.T) {
-	body := "# Study Title\n\n# Hypotheses\n"
+	body := "# Study Title\n\n# Introduction\n"
 	if got := ExtractStudyTitle(body); got != "Study Title" {
 		t.Fatalf("unexpected title: %q", got)
 	}

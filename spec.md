@@ -110,7 +110,9 @@ Required markdown title:
 - first H1 heading is the study name/title
 
 Expected markdown sections:
-- `# Hypotheses`
+- `# Introduction`
+- `# Methods`
+- `# Results`
 - `# Discussion`
 - `# Conclusion`
 - `# Special Thanks`
@@ -199,7 +201,8 @@ All interactive screens render their title/header using a shared in-palette titl
 The shared title bar uses a brighter, bluer turquoise adaptive background tint: light `#78f0ff`, dark `#1490a0`.
 Filter prompt accent blue reuses that same adaptive blue values for palette consistency.
 `sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg data clean`, `sg status`, and `sg publish` are non-interactive.
-CLI help output lists `sg data ingest`, `sg data ls`, and `sg data clean` as separate command entries.
+`sg protocol reconcile` is non-interactive.
+CLI help output lists `sg protocol reconcile`, `sg data ingest`, `sg data ls`, and `sg data clean` as separate command entries.
 
 ### `sg` (no args)
 DWIM entrypoint behavior:
@@ -224,6 +227,7 @@ Creates:
 - do not include `name` in frontmatter
 - do not include `updated_on` in frontmatter
 - write study title as first H1 heading
+- include empty `# Introduction`, `# Methods`, `# Results`, `# Discussion`, `# Conclusion`, and `# Special Thanks` sections in that order
 
 `protocol.sg.md` scaffold rules:
 - create `# Steps` from protocol outline collected during init
@@ -381,6 +385,16 @@ Behavior:
 - if no active step exists, returns an error
 - prints resulting state (`reversed`) with session slug and step slug
 
+### `sg protocol reconcile`
+Purpose: explicitly reconcile session step directory slugs to the current `protocol.sg.md`.
+
+Behavior:
+- non-interactive
+- parses `protocol.sg.md`
+- renames existing session step directories to the current ordinal-based step slugs when the step ordinal still matches
+- preserves `step.sg.md` and `asset/` contents within renamed step directories
+- prints a success message when reconciliation completes
+
 ### `sg data ingest`
 Purpose: copy photo assets into matching step `asset/` folders by capture time.
 
@@ -420,6 +434,7 @@ Purpose: list ingested step assets for all sessions in the current study.
 
 Behavior:
 - non-interactive
+- reconciles session step directory slugs to the current protocol before scanning assets
 - scans all sessions under `<study-root>/session/`
 - prints one row per asset with columns `SESSION | STEP | FILE`
 - ignores filesystem metadata files in asset directories (for example `.DS_Store`)
@@ -431,6 +446,7 @@ Purpose: remove all ingested step assets from the current study.
 
 Behavior:
 - non-interactive
+- reconciles session step directory slugs to the current protocol before deleting assets
 - scans all sessions under `<study-root>/session/`
 - deletes regular files under `step/<step-slug>/asset/` directories
 - does not delete study/session/step metadata files
@@ -524,6 +540,8 @@ All criteria below are pass/fail requirements for v1.
 4. Parsing the study protocol reconciles existing session step directory names to the current ordinal-based step slugs.
 5. Optional step descriptions are parsed from markdown content directly under each H2 step heading.
 6. Step order in parsed output matches source order in `protocol.sg.md`.
+7. `sg protocol reconcile` explicitly triggers that same step-directory reconciliation and prints a success message.
+8. Publish output renders the `protocol.sg.md` summary content as a `Methods` section positioned between study `Introduction` and `Results`.
 
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
@@ -584,11 +602,12 @@ All criteria below are pass/fail requirements for v1.
 14. `sg data ingest --assets-dir <path>` is validated with a repository fixture asset set derived from `study-complete` images, with deterministic per-step placement assertions.
     The canonical fixture directory for that asset set is `fixtures/study-complete-assets/`.
 15. `sg data ls` outputs one sorted row per ingested asset (`SESSION | STEP | FILE`) and an aggregate asset total.
-16. The repository concurrent-ingest fixture keeps study state and source media separate:
+16. `sg data ls` and `sg data clean` reconcile renamed ordinal step directory slugs from the current protocol before scanning session assets.
+17. The repository concurrent-ingest fixture keeps study state and source media separate:
 - study fixture: `fixtures/four-concurrently/` (session step `asset/` dirs empty before ingest)
 - source media fixture: `fixtures/four-concurrently-data/`
 - each source photo embeds metadata describing expected destination (`subject`, `step`) so tests can assert ingestion placement by metadata, not only by filename.
-15. `sg data clean` removes all files under every `session/*/step/*/asset/` directory in the current study and prints a deterministic removed-file count.
+18. `sg data clean` removes all files under every `session/*/step/*/asset/` directory in the current study and prints a deterministic removed-file count.
 
 ### F. Status Reporting
 1. `sg status` reports missing required frontmatter fields across study/session/step files.

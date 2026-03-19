@@ -84,6 +84,41 @@ func TestEnsureProtocolFile_WritesTitlesOnly(t *testing.T) {
 	}
 }
 
+func TestEnsureStudyFile_WritesSaunaSangreSections(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "study.sg.md")
+
+	if err := ensureStudyFile(path, "Sauna y Sangre"); err != nil {
+		t.Fatalf("ensureStudyFile error: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error: %v", err)
+	}
+	got := string(b)
+	for _, token := range []string{
+		"\n# Sauna y Sangre\n",
+		"\n# Introduction\n",
+		"\n# Methods\n",
+		"\n# Results\n",
+		"\n# Discussion\n",
+		"\n# Conclusion\n",
+		"\n# Special Thanks\n",
+	} {
+		if !strings.Contains(got, token) {
+			t.Fatalf("expected token %q in study scaffold\ncontent:\n%s", token, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"# Hypotheses",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("did not expect %q in study scaffold\ncontent:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestProtocolTitlesModel_View_TitleHasBackgroundStyle(t *testing.T) {
 	m := newProtocolTitlesModel()
 	out := m.View().Content

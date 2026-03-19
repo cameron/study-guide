@@ -108,6 +108,44 @@ func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 	}
 }
 
+func TestRunDataLs_ReconcilesRenamedProtocolStepDirectoriesBeforeScanning(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
+	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Renamed Step\n\n")
+	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "asset", "sample.jpg"), "a")
+	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "step.sg.md"), "---\ntime_started: 10:00:00 01-01-2026\n---\n")
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	out := captureStdout(t, func() {
+		if code := Run([]string{"data", "ls"}); code != 0 {
+			t.Fatalf("Run(data ls) code=%d want=0", code)
+		}
+	})
+	out = stripANSI(strings.ReplaceAll(out, "\r\n", "\n"))
+
+	if !strings.Contains(out, "01-renamed-step") {
+		t.Fatalf("expected output to use reconciled step slug, got:\n%s", out)
+	}
+	if strings.Contains(out, "01-original-step") {
+		t.Fatalf("expected output to omit stale step slug after reconciliation, got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-renamed-step", "asset", "sample.jpg")); err != nil {
+		t.Fatalf("expected renamed asset path to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step")); !os.IsNotExist(err) {
+		t.Fatalf("expected original step dir to be removed after reconciliation, got err=%v", err)
+	}
+}
+
 func TestRunDataClean_RemovesAssetFilesAndKeepsMetadata(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")

@@ -31,7 +31,7 @@ func TestRunPublish_GeneratesSessionComparisonPageWithAnonymizedSubjectsByDefaul
 	stubPublishThumbnailFn(t)
 
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nTwo capture steps.\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
@@ -110,7 +110,26 @@ func TestRunPublish_GeneratesSessionComparisonPageWithAnonymizedSubjectsByDefaul
 	if !strings.Contains(string(indexHTML), `<h3><a href="session/session-1/index.html">Subject 1</a></h3>`) {
 		t.Fatalf("expected publish index session title to use anonymized subject label by default, got:\n%s", string(indexHTML))
 	}
+	for _, want := range []string{
+		"<h2>Introduction</h2><pre>Observe changes.</pre>",
+		"<h2>Methods</h2><pre>Two capture steps.</pre>",
+		"<h2>Results</h2><pre>Observed rouleaux.</pre>",
+	} {
+		if !strings.Contains(string(indexHTML), want) {
+			t.Fatalf("expected publish index to contain %q, got:\n%s", want, string(indexHTML))
+		}
+	}
+	if intro := strings.Index(string(indexHTML), "<h2>Introduction</h2>"); intro < 0 {
+		t.Fatalf("expected publish index to include Introduction heading, got:\n%s", string(indexHTML))
+	} else if methods := strings.Index(string(indexHTML), "<h2>Methods</h2>"); methods < 0 || methods < intro {
+		t.Fatalf("expected Methods heading after Introduction, got:\n%s", string(indexHTML))
+	} else if results := strings.Index(string(indexHTML), "<h2>Results</h2>"); results < 0 || results < methods {
+		t.Fatalf("expected Results heading after Methods, got:\n%s", string(indexHTML))
+	}
 	for _, unwanted := range []string{
+		"<h2>Hypotheses</h2>",
+		"<h2>Protocol Summary</h2>",
+		"Placeholder methods should be replaced by protocol summary.",
 		"Started: 10:00:00 01-01-2026",
 		"Finished: 10:30:00 01-01-2026",
 		"<ul><li><strong>Step One</strong>",
@@ -243,7 +262,7 @@ func TestRunPublish_SessionListUsesAnonymizedLabelsByDefault(t *testing.T) {
 	stubPublishThumbnailFn(t)
 
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nOne capture step.\n\n# Steps\n\n## Step One\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
@@ -312,7 +331,7 @@ func TestRunPublish_WithSubjectNamesFlagPreservesSubjectNames(t *testing.T) {
 	stubPublishThumbnailFn(t)
 
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nOne capture step.\n\n# Steps\n\n## Step One\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
@@ -402,7 +421,7 @@ func TestRunPublish_RendersHEICAssetsAsJPEGPreviews(t *testing.T) {
 	defer func() { publishImagePreviewFn = origPreview }()
 
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nOne capture step.\n\n# Steps\n\n## Step One\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
@@ -491,7 +510,7 @@ func TestRunPublish_StartsMultipleHEICPreviewRendersBeforeTheFirstFinishes(t *te
 	})
 
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nTwo capture steps.\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
@@ -569,7 +588,7 @@ func TestRunPublish_StartsMultipleHEICPreviewRendersBeforeTheFirstFinishes(t *te
 
 func TestRunPublish_FailsWhenProtocolCannotBeParsed(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "study")
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Hypotheses\n\nObserve changes.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 09:00:00 01-01-2026\n---\n\n# Comparison Study\n\n# Introduction\n\nObserve changes.\n\n# Methods\n\nPlaceholder methods should be replaced by protocol summary.\n\n# Results\n\nObserved rouleaux.\n\n# Discussion\n\nNotes.\n\n# Conclusion\n\nDone.\n")
 	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Steps\n\n## Step One\n\n")
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 

@@ -6,7 +6,11 @@ active_session_slug: 13-03-2026-boehmer
 
 # Ingesting Data for Concurrent Sessions
 
-# Hypotheses
+# Introduction
+
+# Methods
+
+# Results
 
 # Discussion
 

@@ -19,7 +19,7 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	}
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "study.sg.md"), map[string]any{
 		"status": "WIP",
-	}, "# Example Study\n\n# Hypotheses\n"); err != nil {
+	}, "# Example Study\n\n# Introduction\n"); err != nil {
 		t.Fatalf("write study failed: %v", err)
 	}
 	protocol := "# Protocol Summary\n\nSummary\n\n# Steps\n\n## First Step\n\n## Second Step\n"
@@ -47,6 +47,8 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 
 	mustContain := []string{
 		"study.sg.md missing required field: created_on",
+		"study.sg.md missing section: # Methods",
+		"study.sg.md missing section: # Results",
 		"study.sg.md missing section: # Discussion",
 		"study.sg.md missing section: # Conclusion",
 		"session missing subjects in # Subjects section: 01-01-2026-boehmer",
