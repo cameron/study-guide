@@ -2,10 +2,14 @@
   - launch Photos.app if not running
     - sometimes it will not sync if running on low-power mode...
       - possible to force it to sync via the CLI? or applescript?
-- session board header highlight should only include the title, not the kb shortcut key
 - focused top row needs slight bg (very transparent green)
 - session board should render a focus history on the right
   - recent focus windows w start/stop times and session name
 - session board should offer a way to add notes
   - session notes
   - step notes
+- publish is slow
+  - is there opportunity for parallelizing image processing?
+- anonymize subjects during publish (do this next)
+  - sg publish should anonymize the subject names
+  - sg publish --with-subject-names should preserve existing behavior

@@ -4,8 +4,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -1765,11 +1770,14 @@ func cmdPublishAtRoot(root string) error {
 		return err
 	}
 
-	html := renderPublishHTML(root, title, studyFM, studyBody, protocol, sessions, incomplete)
-	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte(html), 0o644); err != nil {
+	if err := writePublishSessionPages(root, title, sessions, incomplete); err != nil {
 		return err
 	}
-	if err := writePublishSessionPages(root, title, sessions, incomplete); err != nil {
+	html, err := renderPublishHTML(root, title, studyFM, studyBody, protocol, sessions, incomplete)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(siteDir, "index.html"), []byte(html), 0o644); err != nil {
 		return err
 	}
 
@@ -1807,6 +1815,7 @@ func writePublishSessionPages(root, title string, sessions []publishSession, inc
 }
 
 var publishImagePreviewFn = publishImagePreview
+var publishImageThumbnailFn = publishImageThumbnail
 
 type publishStep struct {
 	Name      string
@@ -2009,7 +2018,7 @@ func parseSessionSubjects(sessionBody string) []sessionSubjectRef {
 	return out
 }
 
-func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) string {
+func renderPublishHTML(root, title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession, incomplete bool) (string, error) {
 	studyMeta := fmt.Sprintf("<p>Status: %s<br/>Created: %s</p>", escapeHTML(asString(studyFM["status"])), escapeHTML(asString(studyFM["created_on"])))
 	wipBadge := ""
 	if incomplete {
@@ -2024,27 +2033,27 @@ func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody
 	}
 
 	sessionHTML := ""
+	siteDir := filepath.Join(root, "publish", "site")
 	for _, s := range sessions {
-		sessionHTML += "<section><h3>Session " + escapeHTML(s.Slug) + "</h3>"
-		sessionHTML += "<p>Started: " + escapeHTML(s.Started) + "<br/>Finished: " + escapeHTML(s.Finished) + "</p>"
-		sessionHTML += "<p>Subjects: " + escapeHTML(strings.Join(s.Subjects, ", ")) + "</p>"
+		sessionHTML += `<section><h3><a href="session/` + escapeHTML(s.Slug) + `/index.html">` + escapeHTML(sessionDisplayName(s)) + `</a></h3>`
 		sessionHTML += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;">`
 		for _, st := range s.Steps {
 			for _, img := range st.ImageRefs {
-				thumbURL := "session/" + path.Join(s.Slug, publishAssetRelativeURL(st.Slug, img))
+				sessionAssetPath := filepath.Join(siteDir, "session", s.Slug, filepath.FromSlash(publishAssetRelativeURL(st.Slug, img)))
+				thumbURL, thumbDest, err := publishIndexThumbnailOutputPaths(siteDir, s.Slug, st.Slug, img)
+				if err != nil {
+					return "", err
+				}
+				if err := util.EnsureDir(filepath.Dir(thumbDest)); err != nil {
+					return "", err
+				}
+				if err := publishImageThumbnailFn(sessionAssetPath, thumbDest); err != nil {
+					return "", err
+				}
 				sessionHTML += `<a href="session/` + escapeHTML(s.Slug) + `/index.html"><img src="` + escapeHTML(thumbURL) + `" alt="` + escapeHTML(st.Name) + `" style="display:block;width:72px;height:72px;object-fit:cover;border:1px solid #d2c5b3;background:#efe6da;" /></a>`
 			}
 		}
-		sessionHTML += `</div>`
-		sessionHTML += "<ul>"
-		for _, st := range s.Steps {
-			sessionHTML += "<li><strong>" + escapeHTML(st.Name) + "</strong> [" + escapeHTML(st.Started) + " - " + escapeHTML(st.Finished) + "]"
-			if len(st.ImageRefs) > 0 {
-				sessionHTML += fmt.Sprintf(" images: %d", len(st.ImageRefs))
-			}
-			sessionHTML += "</li>"
-		}
-		sessionHTML += "</ul><p><a href=\"session/" + escapeHTML(s.Slug) + "/index.html\">Compare photos across steps</a></p></section>"
+		sessionHTML += `</div></section>`
 	}
 	if sessionHTML == "" {
 		sessionHTML = "<p>No sessions.</p>"
@@ -2058,7 +2067,7 @@ func renderPublishHTML(_ string, title string, studyFM map[string]any, studyBody
 		"<h2>Protocol Summary</h2><pre>" + escapeHTML(protocol.Summary) + "</pre>" +
 		"<h2>Protocol Steps</h2><ol>" + protocolSteps + "</ol>" +
 		"<h2>Sessions</h2>" + sessionHTML +
-		"</body></html>"
+		"</body></html>", nil
 }
 
 func renderPublishSessionHTML(sessionDir, title string, s publishSession, prevSession, nextSession *publishSession, incomplete bool) (string, error) {
@@ -2203,17 +2212,40 @@ func firstNonEmpty(values ...string) string {
 }
 
 func sessionDisplayName(s publishSession) string {
-	for _, subject := range s.Subjects {
+	subjects := nonEmptySubjects(s.Subjects)
+	switch len(subjects) {
+	case 0:
+		return firstNonEmpty(s.Slug)
+	case 1:
+		return subjects[0]
+	default:
+		lastNames := make([]string, 0, len(subjects))
+		for _, subject := range subjects {
+			lastNames = append(lastNames, lastToken(subject))
+		}
+		return strings.Join(lastNames, ", ")
+	}
+}
+
+func nonEmptySubjects(subjects []string) []string {
+	out := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
 		if strings.TrimSpace(subject) != "" {
-			return subject
+			out = append(out, subject)
 		}
 	}
-	return firstNonEmpty(s.Slug)
+	return out
 }
 
 func publishAssetOutputPaths(sessionDir, stepSlug, src string) (string, string, error) {
 	relURL := publishAssetRelativeURL(stepSlug, src)
 	dest := filepath.Join(sessionDir, filepath.FromSlash(relURL))
+	return relURL, dest, nil
+}
+
+func publishIndexThumbnailOutputPaths(siteDir, sessionSlug, stepSlug, src string) (string, string, error) {
+	relURL := publishIndexThumbnailRelativeURL(sessionSlug, stepSlug, src)
+	dest := filepath.Join(siteDir, filepath.FromSlash(relURL))
 	return relURL, dest, nil
 }
 
@@ -2224,6 +2256,12 @@ func publishAssetRelativeURL(stepSlug, src string) string {
 		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".jpg"
 	}
 	return path.Join("assets", stepSlug, name)
+}
+
+func publishIndexThumbnailRelativeURL(sessionSlug, stepSlug, src string) string {
+	name := filepath.Base(src)
+	name = strings.TrimSuffix(name, filepath.Ext(name)) + ".jpg"
+	return path.Join("thumbs", sessionSlug, stepSlug, name)
 }
 
 func publishAssetForHTML(src, dest string) error {
@@ -2262,6 +2300,70 @@ func publishImagePreview(src, dst string) error {
 		return fmt.Errorf("render publish preview for %s: %w: %s", src, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func publishImageThumbnail(src, dst string) error {
+	upToDate, err := publishAssetUpToDate(src, dst)
+	if err != nil {
+		return err
+	}
+	if upToDate {
+		return nil
+	}
+	file, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	img, _, decodeErr := image.Decode(file)
+	_ = file.Close()
+	if decodeErr == nil {
+		thumb := resizeImageToFit(img, 144)
+		out, err := os.Create(dst)
+		if err != nil {
+			return err
+		}
+		encodeErr := jpeg.Encode(out, thumb, &jpeg.Options{Quality: 80})
+		closeErr := out.Close()
+		if encodeErr != nil {
+			return encodeErr
+		}
+		return closeErr
+	}
+	cmd := exec.Command("sips", "-Z", "144", "-s", "format", "jpeg", src, "--out", dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("render publish thumbnail for %s: %w: %s", src, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func resizeImageToFit(src image.Image, maxDim int) image.Image {
+	bounds := src.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	if srcW <= 0 || srcH <= 0 {
+		return image.NewRGBA(image.Rect(0, 0, 1, 1))
+	}
+	scale := math.Min(1, float64(maxDim)/float64(max(srcW, srcH)))
+	dstW := max(1, int(math.Round(float64(srcW)*scale)))
+	dstH := max(1, int(math.Round(float64(srcH)*scale)))
+	if dstW == srcW && dstH == srcH {
+		dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+		for y := 0; y < dstH; y++ {
+			for x := 0; x < dstW; x++ {
+				dst.Set(x, y, src.At(bounds.Min.X+x, bounds.Min.Y+y))
+			}
+		}
+		return dst
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	for y := 0; y < dstH; y++ {
+		srcY := bounds.Min.Y + y*srcH/dstH
+		for x := 0; x < dstW; x++ {
+			srcX := bounds.Min.X + x*srcW/dstW
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+	return dst
 }
 
 func renderPublishText(title string, studyFM map[string]any, studyBody string, protocol store.Protocol, sessions []publishSession) string {

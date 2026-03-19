@@ -478,6 +478,30 @@ func TestSessionsUI_BrowseView_TitleHasBackgroundStyle(t *testing.T) {
 	}
 }
 
+func TestSessionsUI_BrowseView_TitleHighlight_ExcludesKeyHint(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		view:   sessionsViewBrowse,
+		filter: newSessionsFilterInput(),
+		table:  table.New(),
+	}
+
+	firstLine := strings.SplitN(m.View().Content, "\n", 2)[0]
+	parts := strings.SplitN(firstLine, " "+sessionsBrowseTitleKeyHint, 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected key hint suffix on browse title line, got %q", stripANSI(firstLine))
+	}
+	if countBackgroundANSI(parts[0]) < 1 {
+		t.Fatalf("expected highlighted Sessions title prefix, got %q", firstLine)
+	}
+	if countBackgroundANSI(parts[1]) != 0 {
+		t.Fatalf("expected unhighlighted key hint suffix, got %q", firstLine)
+	}
+	plain := stripANSI(firstLine)
+	if !strings.Contains(plain, "Sessions") || !strings.Contains(plain, sessionsBrowseTitleKeyHint) {
+		t.Fatalf("expected browse title line text, got %q", plain)
+	}
+}
+
 func TestSessionsUI_BrowseFilter_MatchesSessionSlugWithoutVisibleSlugColumn(t *testing.T) {
 	m := sessionsSwitchboardModel{
 		view:   sessionsViewBrowse,

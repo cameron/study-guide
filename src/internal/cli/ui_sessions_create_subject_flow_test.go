@@ -109,7 +109,7 @@ func TestSessionsUI_CreateSubjectFlowCreatesSubjectAndSessionAndReturnsToBrowse(
 	}
 
 	view := stripANSI(m.View().Content)
-	if !strings.Contains(view, "Sessions [enter] next step") {
+	if !strings.Contains(view, "Sessions") || !strings.Contains(view, "[enter] next step") {
 		t.Fatalf("expected browse header after returning from subject form, got:\n%s", view)
 	}
 	if !strings.Contains(view, "Beta Subject") {

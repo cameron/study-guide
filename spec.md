@@ -320,12 +320,13 @@ Behavior:
 20. Browse table does not include `Create new session` or `Exit` rows.
    When there are no incomplete sessions, the table shows a single empty-state row: `no open sessions`.
 20. Browse title-line key hint is: `[enter] next step // [ctrl+b] step backwards // [ctrl+n] create session // [p] publish // [esc] unfocus/quit`.
-21. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
-22. Create mode header text is exactly `Create Session`; instructional copy (`select a subject, then confirm Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
-23. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above the create-confirmation row.
-24. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
-25. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
-26. Create-mode list item labels are uniformly indented with exactly two leading spaces.
+21. In browse view, only the literal `Sessions` title text uses the shared highlighted title bar styling; the inline key hint remains plain text on the same line after the title.
+22. In create mode, selecting `Create` returns to the browse sessions table (showing the created session when applicable).
+23. Create mode header text is exactly `Create Session`; instructional copy (`select a subject, then confirm Create; esc to cancel`) is shown as subtle/grey text directly below the header (above list items), not inside the header.
+24. The shared create-session picker (used by both `sg session` and `sg sessions`) includes a `(+) New subject` action above the create-confirmation row.
+25. Session completion/listing is derived from protocol step progress only (not `session.sg.md` timing fields).
+26. In create mode, toggling subject selection must not emit transient per-toggle status text (for example `selected subjects: N`), so the view height remains stable while selecting.
+27. Create-mode list item labels are uniformly indented with exactly two leading spaces.
 27. Create-mode list selection must not change horizontal alignment; selected and unselected rows use the same left inset (no extra selected-state border offset).
 28. Create-mode instructional info line is horizontally aligned with list items using the same two-space inset.
 29. `p` triggers publish from browse view (keyboard action; not a table row).
@@ -465,6 +466,7 @@ Generated outputs should include:
 - protocol summary and steps
 - sessions in chronological order
 - for each session: subjects, step timeline, and associated images
+- the web session list shows only a linked session title and thumbnails; the title is the full subject name when there is one subject, otherwise a comma-separated list of subject last names, and links to that session gallery
 
 ## Web Subject Signup (Optional in v1)
 
@@ -600,6 +602,7 @@ All criteria below are pass/fail requirements for v1.
 - hypotheses, discussion, conclusion
 - protocol summary + step list
 - sessions in chronological order, including chrono-ordered thumbnails of photos
+- index-page thumbnails are published as separate derived image files rather than linking directly to full-size session assets
 - HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
 - page per session
   - compact single-line toolbar with link back to index, session start date (unlabeled), subject name, and image-size controls

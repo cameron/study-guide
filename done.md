@@ -1,4 +1,5 @@
 - open assets folders from session board
+- session board header highlight should only include the title, not the kb shortcut key
 - session table simplification
   - visual separation for focused row
   - remove the focused and advance columns

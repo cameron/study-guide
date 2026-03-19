@@ -376,7 +376,9 @@ func (m sessionsSwitchboardModel) View() tea.View {
 	}
 
 	var b strings.Builder
-	b.WriteString(renderScreenTitle("Sessions " + sessionsBrowseTitleKeyHint))
+	b.WriteString(renderScreenTitle("Sessions"))
+	b.WriteString(" ")
+	b.WriteString(sessionsBrowseTitleKeyHint)
 	b.WriteString("\n")
 	b.WriteString(m.filter.View())
 	b.WriteString("\n")
