@@ -549,7 +549,7 @@ func (m sessionsSwitchboardModel) handleCreateShortcut() (tea.Model, tea.Cmd) {
 		m.message = "select a subject before Create"
 		return m, nil
 	}
-	slug, _, err := createSessionScaffold(m.root, selected)
+	slug, _, err := createSessionScaffold(m.root, selected, m.protocol)
 	if err != nil {
 		m.message = "create failed: " + err.Error()
 		return m, nil
@@ -753,11 +753,8 @@ func (m sessionsSwitchboardModel) renderEntryRow(e browseEntry) (string, string,
 		if stepNum < 0 {
 			stepNum = 0
 		}
-		if rec.StepCount <= 0 {
+		if rec.StepCount < 0 {
 			rec.StepCount = len(m.protocol.Steps)
-		}
-		if rec.StepCount <= 0 {
-			rec.StepCount = 1
 		}
 		if stepNum > rec.StepCount {
 			stepNum = rec.StepCount

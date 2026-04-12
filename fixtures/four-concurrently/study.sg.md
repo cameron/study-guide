@@ -10,6 +10,18 @@ active_session_slug: 13-03-2026-boehmer
 
 # Methods
 
+Four arbitrary steps.
+
+## Protocol
+
+### step one
+
+### step two
+
+### step three
+
+### step four
+
 # Results
 
 # Discussion

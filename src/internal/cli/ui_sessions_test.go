@@ -176,6 +176,24 @@ func TestSessionsUI_BrowseRowSnapshots(t *testing.T) {
 	}
 }
 
+func TestSessionsUI_BrowseRowSnapshots_UsesFocusableProgressCounts(t *testing.T) {
+	m := sessionsSwitchboardModel{
+		protocol: testProtocolThreeSteps(),
+	}
+	rec := sessionRecord{
+		Slug:          "18-02-2026-boehmer",
+		SubjectNames:  []string{"Cameron Boehmer"},
+		CurrentStep:   "First Step",
+		ProgressSteps: 1,
+		StepCount:     2,
+		NextStep:      "Third Step",
+	}
+	subject, current, next := m.renderEntryRow(browseEntry{kind: browseEntrySession, record: rec})
+	if subject != "Cameron Boehmer" || current != "[1/2] First Step" || next != "Third Step" {
+		t.Fatalf("unexpected row snapshot: %q | %q | %q", subject, current, next)
+	}
+}
+
 func TestSessionsUI_EnterOnSelectedRowFocusesAndStartsFirstStep(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SG_SUBJECT_DIR", filepath.Join(root, ".subjects"))

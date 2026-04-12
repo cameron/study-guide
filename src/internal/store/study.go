@@ -16,6 +16,26 @@ type Protocol struct {
 	Steps   []ProtocolStep
 }
 
+type StudySection struct {
+	Name    string
+	Content string
+}
+
+type StudyDocument struct {
+	Title    string
+	Lead     string
+	Sections []StudySection
+}
+
+func (d StudyDocument) SectionContent(name string) string {
+	for _, sec := range d.Sections {
+		if sec.Name == name {
+			return sec.Content
+		}
+	}
+	return ""
+}
+
 type ProtocolStep struct {
 	Name        string
 	Slug        string
@@ -122,7 +142,7 @@ func ParseProtocolSteps(studyRoot string) ([]string, error) {
 }
 
 func ParseProtocol(studyRoot string) (Protocol, error) {
-	p := filepath.Join(studyRoot, "protocol.sg.md")
+	p := filepath.Join(studyRoot, "study.sg.md")
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return Protocol{}, err
@@ -138,11 +158,64 @@ func ParseProtocol(studyRoot string) (Protocol, error) {
 }
 
 func ParseProtocolMarkdown(md string) (Protocol, error) {
+	doc := ParseStudyDocumentMarkdown(md)
+	methods := doc.SectionContent("Methods")
+	if strings.TrimSpace(methods) == "" {
+		return Protocol{}, fmt.Errorf("study.sg.md missing required section: # Methods")
+	}
+	return parseProtocolFromMethods(methods)
+}
+
+func ParseStudyDocumentMarkdown(md string) StudyDocument {
 	lines := strings.Split(md, "\n")
-	inSummary := false
-	inSteps := false
-	seenSummary := false
-	seenSteps := false
+	seenTitle := false
+	currentSectionIdx := -1
+	var title string
+	var leadLines []string
+	var sections []StudySection
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "# ") {
+			name := strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			if !seenTitle {
+				seenTitle = true
+				title = name
+				currentSectionIdx = -1
+				continue
+			}
+			sections = append(sections, StudySection{Name: name})
+			currentSectionIdx = len(sections) - 1
+			continue
+		}
+		if !seenTitle {
+			continue
+		}
+		if currentSectionIdx >= 0 {
+			sec := &sections[currentSectionIdx]
+			if sec.Content == "" {
+				sec.Content = raw
+			} else {
+				sec.Content += "\n" + raw
+			}
+			continue
+		}
+		leadLines = append(leadLines, raw)
+	}
+	for i := range sections {
+		sections[i].Content = strings.TrimSpace(sections[i].Content)
+	}
+	return StudyDocument{
+		Title:    strings.TrimSpace(title),
+		Lead:     strings.TrimSpace(strings.Join(leadLines, "\n")),
+		Sections: sections,
+	}
+}
+
+func parseProtocolFromMethods(methods string) (Protocol, error) {
+	lines := strings.Split(methods, "\n")
+	inProtocol := false
+	seenProtocol := false
 	var summaryLines []string
 	var steps []ProtocolStep
 	stepDescriptions := map[int][]string{}
@@ -150,31 +223,23 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
-		if strings.HasPrefix(line, "# ") {
+		if strings.HasPrefix(line, "## ") {
 			switch line {
-			case "# Protocol Summary":
-				seenSummary = true
-				inSummary = true
-				inSteps = false
-				currentStepIdx = -1
-				continue
-			case "# Steps":
-				seenSteps = true
-				inSteps = true
-				inSummary = false
+			case "## Protocol":
+				seenProtocol = true
+				inProtocol = true
 				currentStepIdx = -1
 				continue
 			default:
-				inSummary = false
-				inSteps = false
+				inProtocol = false
 				currentStepIdx = -1
 			}
 		}
-		if inSummary {
+		if !inProtocol {
 			summaryLines = append(summaryLines, raw)
 		}
-		if inSteps && strings.HasPrefix(line, "## ") {
-			name := strings.TrimSpace(strings.TrimPrefix(line, "## "))
+		if inProtocol && strings.HasPrefix(line, "### ") {
+			name := strings.TrimSpace(strings.TrimPrefix(line, "### "))
 			if name == "" {
 				currentStepIdx = -1
 				continue
@@ -185,21 +250,23 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 			currentStepIdx = len(steps) - 1
 			continue
 		}
-		if inSteps && currentStepIdx >= 0 && !strings.HasPrefix(line, "#") {
+		if inProtocol && currentStepIdx >= 0 && !strings.HasPrefix(line, "#") {
 			stepDescriptions[currentStepIdx] = append(stepDescriptions[currentStepIdx], raw)
 		}
 	}
 
-	if !seenSummary {
-		return Protocol{}, fmt.Errorf("protocol.sg.md missing required section: # Protocol Summary")
-	}
-	if !seenSteps {
-		return Protocol{}, fmt.Errorf("protocol.sg.md missing required section: # Steps")
+	if !seenProtocol {
+		return Protocol{}, fmt.Errorf("study.sg.md missing required section: # Methods -> ## Protocol")
 	}
 	for i := range steps {
 		base := util.Slugify(steps[i].Name)
 		if strings.TrimSpace(base) == "" {
 			base = "step"
+		}
+		for j := 0; j < i; j++ {
+			if util.Slugify(steps[j].Name) == base {
+				return Protocol{}, fmt.Errorf("duplicate protocol step title after slug normalization: %s", steps[i].Name)
+			}
 		}
 		steps[i].Slug = fmt.Sprintf("%02d-%s", i+1, base)
 		steps[i].Description = strings.TrimSpace(strings.Join(stepDescriptions[i], "\n"))
@@ -212,13 +279,7 @@ func ParseProtocolMarkdown(md string) (Protocol, error) {
 }
 
 func ExtractStudyTitle(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		l := strings.TrimSpace(line)
-		if strings.HasPrefix(l, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(l, "# "))
-		}
-	}
-	return ""
+	return ParseStudyDocumentMarkdown(body).Title
 }
 
 func reconcileSessionStepDirectories(studyRoot string, protocol Protocol) error {
@@ -243,25 +304,101 @@ func reconcileSessionStepDirectories(studyRoot string, protocol Protocol) error 
 
 func reconcileSessionStepDirectory(sessionDir string, protocol Protocol) error {
 	stepRoot := filepath.Join(sessionDir, "step")
-	for _, step := range protocol.Steps {
-		targetDir := filepath.Join(stepRoot, step.Slug)
-		if _, err := os.Stat(targetDir); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return err
+	entries, err := os.ReadDir(stepRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
+		return err
+	}
 
-		matches, err := filepath.Glob(filepath.Join(stepRoot, stepSlugOrdinalPrefix(step.Slug)+"*"))
-		if err != nil {
-			return err
-		}
-		if len(matches) == 0 {
+	type existingStepDir struct {
+		name      string
+		titleSlug string
+		ordinal   string
+	}
+
+	existingByName := map[string]existingStepDir{}
+	existingByTitle := map[string]existingStepDir{}
+	existingByOrdinal := map[string]existingStepDir{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if len(matches) > 1 {
-			return fmt.Errorf("session step directory reconcile ambiguous for %s", step.Slug)
+		info := existingStepDir{
+			name:      entry.Name(),
+			titleSlug: stepSlugTitle(entry.Name()),
+			ordinal:   stepSlugOrdinalPrefix(entry.Name()),
 		}
-		if err := os.Rename(matches[0], targetDir); err != nil {
+		if strings.TrimSpace(info.titleSlug) == "" {
+			continue
+		}
+		if _, ok := existingByTitle[info.titleSlug]; ok {
+			return fmt.Errorf("session step directory reconcile ambiguous for title %s", info.titleSlug)
+		}
+		if _, ok := existingByOrdinal[info.ordinal]; ok {
+			return fmt.Errorf("session step directory reconcile ambiguous for ordinal %s", strings.TrimSuffix(info.ordinal, "-"))
+		}
+		existingByName[info.name] = info
+		existingByTitle[info.titleSlug] = info
+		existingByOrdinal[info.ordinal] = info
+	}
+
+	assignedOld := map[string]bool{}
+	moves := map[string]string{}
+	targetsByOld := map[string]string{}
+	unmatchedSteps := make([]ProtocolStep, 0)
+
+	for _, step := range protocol.Steps {
+		targetName := step.Slug
+		if info, ok := existingByTitle[stepSlugTitle(step.Slug)]; ok {
+			assignedOld[info.name] = true
+			targetsByOld[info.name] = targetName
+			continue
+		}
+		unmatchedSteps = append(unmatchedSteps, step)
+	}
+
+	for _, step := range unmatchedSteps {
+		ordinal := stepSlugOrdinalPrefix(step.Slug)
+		info, ok := existingByOrdinal[ordinal]
+		if !ok || assignedOld[info.name] {
+			continue
+		}
+		assignedOld[info.name] = true
+		targetsByOld[info.name] = step.Slug
+	}
+
+	for name := range existingByName {
+		if assignedOld[name] {
+			continue
+		}
+		return fmt.Errorf("unsupported protocol step reconcile for session %s: stale step directory %s", sessionDir, name)
+	}
+
+	for oldName, newName := range targetsByOld {
+		if oldName == newName {
+			continue
+		}
+		moves[oldName] = newName
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+
+	tempByOld := map[string]string{}
+	moveIdx := 0
+	for oldName := range moves {
+		moveIdx++
+		tempByOld[oldName] = filepath.Join(stepRoot, fmt.Sprintf(".reconcile-%03d-%s", moveIdx, oldName))
+	}
+	for oldName, tempPath := range tempByOld {
+		if err := os.Rename(filepath.Join(stepRoot, oldName), tempPath); err != nil {
+			return err
+		}
+	}
+	for oldName, newName := range moves {
+		if err := os.Rename(tempByOld[oldName], filepath.Join(stepRoot, newName)); err != nil {
 			return err
 		}
 	}
@@ -274,4 +411,12 @@ func stepSlugOrdinalPrefix(slug string) string {
 		return slug
 	}
 	return prefix + "-"
+}
+
+func stepSlugTitle(slug string) string {
+	_, rest, ok := strings.Cut(slug, "-")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(rest)
 }

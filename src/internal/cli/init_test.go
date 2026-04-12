@@ -54,16 +54,16 @@ func TestProtocolTitlesModel_EmptyEnterDoesNotFinishBeforeFirstStep(t *testing.T
 	}
 }
 
-func TestEnsureProtocolFile_WritesTitlesOnly(t *testing.T) {
+func TestEnsureStudyFile_WritesProtocolTitlesIntoMethods(t *testing.T) {
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "protocol.sg.md")
+	path := filepath.Join(tmp, "study.sg.md")
 	steps := []string{
 		"Baseline",
 		"WiFi",
 		"Grounding",
 	}
-	if err := ensureProtocolFile(path, steps); err != nil {
-		t.Fatalf("ensureProtocolFile error: %v", err)
+	if err := ensureStudyFile(path, "Protocol Study", steps); err != nil {
+		t.Fatalf("ensureStudyFile error: %v", err)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -71,12 +71,13 @@ func TestEnsureProtocolFile_WritesTitlesOnly(t *testing.T) {
 	}
 	got := string(b)
 	for _, token := range []string{
-		"## Baseline",
-		"## WiFi",
-		"## Grounding",
+		"\n## Protocol\n",
+		"### Baseline",
+		"### WiFi",
+		"### Grounding",
 	} {
 		if !strings.Contains(got, token) {
-			t.Fatalf("expected token %q in protocol scaffold\ncontent:\n%s", token, got)
+			t.Fatalf("expected token %q in study scaffold\ncontent:\n%s", token, got)
 		}
 	}
 	if strings.Contains(got, "|") {
@@ -88,7 +89,7 @@ func TestEnsureStudyFile_WritesSaunaSangreSections(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "study.sg.md")
 
-	if err := ensureStudyFile(path, "Sauna y Sangre"); err != nil {
+	if err := ensureStudyFile(path, "Sauna y Sangre", []string{"Baseline"}); err != nil {
 		t.Fatalf("ensureStudyFile error: %v", err)
 	}
 
@@ -101,6 +102,8 @@ func TestEnsureStudyFile_WritesSaunaSangreSections(t *testing.T) {
 		"\n# Sauna y Sangre\n",
 		"\n# Introduction\n",
 		"\n# Methods\n",
+		"\n## Protocol\n",
+		"\n### Baseline\n",
 		"\n# Results\n",
 		"\n# Discussion\n",
 		"\n# Conclusion\n",

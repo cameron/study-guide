@@ -74,6 +74,46 @@ func TestAdvanceSessionOnce_AdvancesToNextStep(t *testing.T) {
 	}
 }
 
+func TestAdvanceSessionOnce_SkipsUnfocusableStepWhenAdvancing(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocolThreeSteps()
+	slug := "01-01-2026-skip"
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"), map[string]any{
+		"unfocusable": true,
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "third-step", "step.sg.md"), map[string]any{}, "")
+
+	res, err := advanceSessionOnce(root, slug, protocol)
+	if err != nil {
+		t.Fatalf("advanceSessionOnce returned error: %v", err)
+	}
+	if res.State != "advanced" || res.StepSlug != "third-step" {
+		t.Fatalf("unexpected result: %#v", res)
+	}
+
+	secondFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read second step failed: %v", err)
+	}
+	if asString(secondFM["time_started"]) == "" || asString(secondFM["time_finished"]) == "" {
+		t.Fatalf("expected skipped unfocusable step to be auto-completed, got %#v", secondFM)
+	}
+
+	thirdFM, _, err := util.ReadFrontmatterFile(filepath.Join(root, "session", slug, "step", "third-step", "step.sg.md"))
+	if err != nil {
+		t.Fatalf("read third step failed: %v", err)
+	}
+	if asString(thirdFM["time_started"]) == "" {
+		t.Fatalf("expected third step time_started after skip")
+	}
+}
+
 func TestAdvanceSessionOnce_FinishesSessionAtFinalStep(t *testing.T) {
 	root := t.TempDir()
 	protocol := testProtocol()
@@ -180,8 +220,7 @@ func TestInferSessionSlugFromCwd(t *testing.T) {
 func TestCmdSessionAdvance_InfersSessionFromDirectory(t *testing.T) {
 	root := t.TempDir()
 	slug := "01-01-2026-epsilon"
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## First Step\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "First Step"))
 	mustWriteSessionFile(t, root, slug, map[string]any{
 		"time_started": "10:00:00 01-01-2026",
 		"subject_ids":  []string{"sub-1"},
@@ -231,6 +270,36 @@ func TestLoadSessionRecords_ToleratesImplicitStepCompletion(t *testing.T) {
 	}
 	if records[0].InvalidReason != "" {
 		t.Fatalf("did not expect invalid reason, got %q", records[0].InvalidReason)
+	}
+}
+
+func TestLoadSessionRecords_ReadsAheadPastUnfocusableNextStep(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocolThreeSteps()
+	slug := "01-01-2026-read-ahead"
+	mustWriteSessionFile(t, root, slug, map[string]any{
+		"subject_ids": []string{"sub-1"},
+	})
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "first-step", "step.sg.md"), map[string]any{
+		"time_started": "10:01:00 01-01-2026",
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "second-step", "step.sg.md"), map[string]any{
+		"unfocusable": true,
+	}, "")
+	mustWriteStepFile(t, filepath.Join(root, "session", slug, "step", "third-step", "step.sg.md"), map[string]any{}, "")
+
+	records, err := loadSessionRecords(root, protocol, map[string]store.Subject{})
+	if err != nil {
+		t.Fatalf("loadSessionRecords returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].NextStep != "Third Step" {
+		t.Fatalf("expected next step to read ahead to Third Step, got %q", records[0].NextStep)
+	}
+	if records[0].ProgressSteps != 1 || records[0].StepCount != 2 {
+		t.Fatalf("expected focusable progress 1/2, got %d/%d", records[0].ProgressSteps, records[0].StepCount)
 	}
 }
 
@@ -384,6 +453,36 @@ func TestAdvanceSessionOnce_RejectsNonContiguousProgress(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "non-contiguous") {
 		t.Fatalf("expected non-contiguous error, got: %v", err)
+	}
+}
+
+func TestCreateSessionScaffold_PrecreatesAllProtocolStepFiles(t *testing.T) {
+	root := t.TempDir()
+	protocol := testProtocolThreeSteps()
+	selected := []store.Subject{{UUID: "sub-1", Name: "Alpha Subject"}}
+
+	slug, sessionDir, err := createSessionScaffold(root, selected, protocol)
+	if err != nil {
+		t.Fatalf("createSessionScaffold returned error: %v", err)
+	}
+	if strings.TrimSpace(slug) == "" {
+		t.Fatalf("expected session slug")
+	}
+	for _, step := range protocol.Steps {
+		stepPath := filepath.Join(sessionDir, "step", step.Slug, "step.sg.md")
+		fm, body, err := util.ReadFrontmatterFile(stepPath)
+		if err != nil {
+			t.Fatalf("read step file failed for %s: %v", step.Slug, err)
+		}
+		if len(fm) != 0 {
+			t.Fatalf("expected empty frontmatter for %s, got %#v", step.Slug, fm)
+		}
+		if strings.TrimSpace(body) != "" {
+			t.Fatalf("expected empty step body for %s, got %q", step.Slug, body)
+		}
+		if info, err := os.Stat(filepath.Join(sessionDir, "step", step.Slug, "asset")); err != nil || !info.IsDir() {
+			t.Fatalf("expected asset dir for %s, err=%v", step.Slug, err)
+		}
 	}
 }
 

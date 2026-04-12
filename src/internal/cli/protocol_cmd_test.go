@@ -9,8 +9,7 @@ import (
 
 func TestRunProtocolReconcile_RenamesSessionStepDirectories(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Renamed Step\n\n## Second Step\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "Renamed Step", "Second Step"))
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "step.sg.md"), "---\ntime_started: 10:00:00 01-01-2026\n---\n")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "asset", "sample.jpg"), "asset")
 

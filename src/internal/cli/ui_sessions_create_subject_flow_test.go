@@ -141,6 +141,19 @@ func TestSessionsUI_CreateSubjectFlowCreatesSubjectAndSessionAndReturnsToBrowse(
 	if !strings.Contains(sessionBody, "Beta Subject ("+allSubjects[1].UUID+")") {
 		t.Fatalf("expected created session body to reference new subject, got:\n%s", sessionBody)
 	}
+	sessionSlug := sessionDirs[0].Name()
+	for _, stepSlug := range []string{"01-step-one"} {
+		stepFM, stepBody, err := util.ReadFrontmatterFile(filepath.Join(studyRoot, "session", sessionSlug, "step", stepSlug, "step.sg.md"))
+		if err != nil {
+			t.Fatalf("read created step failed: %v", err)
+		}
+		if len(stepFM) != 0 {
+			t.Fatalf("expected created step frontmatter to remain empty, got %#v", stepFM)
+		}
+		if strings.TrimSpace(stepBody) != "" {
+			t.Fatalf("expected created step body to remain empty, got %q", stepBody)
+		}
+	}
 }
 
 func TestSessionCreatePicker_ListHeightExpandsWithViewport(t *testing.T) {

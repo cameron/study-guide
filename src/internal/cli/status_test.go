@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,12 +18,8 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 	}
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "study.sg.md"), map[string]any{
 		"status": "WIP",
-	}, "# Example Study\n\n# Introduction\n"); err != nil {
+	}, "# Example Study\n\n# Introduction\n\n# Methods\n\nSummary\n\n## Protocol\n\n### First Step\n\n### Second Step\n"); err != nil {
 		t.Fatalf("write study failed: %v", err)
-	}
-	protocol := "# Protocol Summary\n\nSummary\n\n# Steps\n\n## First Step\n\n## Second Step\n"
-	if err := os.WriteFile(filepath.Join(root, "protocol.sg.md"), []byte(protocol), 0o644); err != nil {
-		t.Fatalf("write protocol failed: %v", err)
 	}
 	if err := util.WriteFrontmatterFile(filepath.Join(root, "session", "01-01-2026-boehmer", "session.sg.md"), map[string]any{}, ""); err != nil {
 		t.Fatalf("write session failed: %v", err)
@@ -47,7 +42,6 @@ func TestCollectStatusIssuesReportsMissingFieldsSectionsAndSteps(t *testing.T) {
 
 	mustContain := []string{
 		"study.sg.md missing required field: created_on",
-		"study.sg.md missing section: # Methods",
 		"study.sg.md missing section: # Results",
 		"study.sg.md missing section: # Discussion",
 		"study.sg.md missing section: # Conclusion",

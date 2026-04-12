@@ -46,7 +46,6 @@ Out of scope for v1:
 ```text
 <study-root>/
   study.sg.md
-  protocol.sg.md
   subject-requirements.yaml
   session/
     <session-slug>/
@@ -59,7 +58,7 @@ Out of scope for v1:
 ```
 
 Notes:
-- v1 has exactly one protocol: `<study-root>/protocol.sg.md`
+- v1 has exactly one protocol stored inside `<study-root>/study.sg.md`
 - sessions are not nested under protocol
 - `fixtures/study-eg/` is the canonical sample tree name (not `sample-eg/`)
 - shipped fixtures used by tests must use anonymized study and subject names
@@ -105,9 +104,25 @@ Required frontmatter:
 Optional frontmatter:
 - `result_status` (enum: `positive`, `negative`, `null`, `uncertain`)
 - `pi_subject_ids` (array of subject UUIDs)
+- `hero_comparison`
+  - optional object describing a study-level side-by-side comparison image pair for publish output
+  - shape:
+    - `left`
+      - `session` (source session slug)
+      - `step` (source step slug)
+      - `asset_index` (0-based index into that step's sorted asset list)
+    - `right`
+      - `session` (source session slug)
+      - `step` (source step slug)
+      - `asset_index` (0-based index into that step's sorted asset list)
 
 Required markdown title:
 - first H1 heading is the study name/title
+
+Optional study preamble:
+- markdown between the title H1 and the next top-level H1 section is preserved as authored study preamble content
+- study preamble may contain subtitle, abstract, or editorial notes before `# Introduction`
+- study parsing preserves title, study preamble, and top-level H1 sections in source order from a single pass over `study.sg.md`
 
 Expected markdown sections:
 - `# Introduction`
@@ -117,20 +132,18 @@ Expected markdown sections:
 - `# Conclusion`
 - `# Special Thanks`
 
-## `<study-root>/protocol.sg.md`
-Required markdown sections:
-- `# Protocol Summary`
-- `# Steps`
-
-`# Steps` contract:
-- each step is an H2 heading under `# Steps`
+`# Methods` contract:
+- markdown directly under `# Methods` before `## Protocol` is the protocol summary / authored methods text
+- `## Protocol` is required under `# Methods`
+- each protocol step is an H3 heading under `## Protocol`
 - heading text is step display name
+- protocol step titles must be unique after slug normalization within a study
 - step slug is an ordered prefix plus normalized heading: `<NN>-<kebab-step-name>` where `NN` is 1-based, zero-padded to at least two digits (`01`, `02`, ...)
 - when a step heading changes but its protocol position stays the same, existing session step directories for that ordinal are renamed to the regenerated step slug and keep their `step.sg.md` plus `asset/` contents
-- optional step description is free-form markdown directly below the step heading until the next H2 (or next H1 section)
-
-Optional markdown sections:
-- `# Actions`
+- when protocol steps are reordered without renaming, existing session step directories are reassigned by normalized step title and then renamed to the regenerated ordered step slugs
+- when a new protocol step is added, existing session step directories continue following their historical step identities rather than being reassigned to fill the inserted ordinal; newly added steps do not gain synthesized historical session directories
+- v1 supports rename-only, reorder-only, add-only, and add+rename protocol edits; simultaneous rename+reorder edits are out of scope
+- optional step description is free-form markdown directly below the step heading until the next H3 (or next H2 / H1 section)
 
 ## `<study-root>/subject-requirements.yaml`
 Required keys: none
@@ -187,6 +200,14 @@ Optional frontmatter:
   - each entry must use the standard timestamp format (`HH:MM:SS DD-MM-YYYY`)
   - `time_finished` may be omitted only while the step is currently focused; it must be present for closed/completed sessions
   - ingestion ownership uses `focus_windows` only (no fallback to step-envelope ownership)
+- `unfocusable` (boolean)
+  - when `true`, `sg sessions` and `sg session advance` skip over that step within the same advance action
+  - the step still exists for publication/export/history, but is excluded from session-board progress counts/labels
+  - photo ingest ignores that step's focus-window requirements and never assigns assets to it
+- `render_asset_indices` (array of 0-based integers)
+  - controls publish image selection/order for this step
+  - indices are resolved against that step's sorted source asset list
+  - when present, publish renders only the listed assets, in the listed order
 
 Optional markdown body:
 - free-form notes
@@ -200,9 +221,9 @@ All interactive Bubble Tea flows must be launched through a single shared progra
 All interactive screens render their title/header using a shared in-palette title bar style with background fill (not plain unstyled text headers).
 The shared title bar uses a brighter, bluer turquoise adaptive background tint: light `#78f0ff`, dark `#1490a0`.
 Filter prompt accent blue reuses that same adaptive blue values for palette consistency.
-`sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg data clean`, `sg status`, and `sg publish` are non-interactive.
+`sg session advance`, `sg sessions print`, `sg data ingest`, `sg data ls`, `sg data clean`, `sg status`, `sg publish`, and `sg export` are non-interactive.
 `sg protocol reconcile` is non-interactive.
-CLI help output lists `sg protocol reconcile`, `sg data ingest`, `sg data ls`, and `sg data clean` as separate command entries.
+CLI help output lists `sg protocol reconcile`, `sg data ingest`, `sg data ls`, `sg data clean`, and `sg export` as separate command entries.
 
 ### `sg` (no args)
 DWIM entrypoint behavior:
@@ -218,7 +239,6 @@ Interactive prompt:
 
 Creates:
 - `study.sg.md`
-- `protocol.sg.md`
 - `subject-requirements.yaml`
 - `session/`
 
@@ -228,10 +248,8 @@ Creates:
 - do not include `updated_on` in frontmatter
 - write study title as first H1 heading
 - include empty `# Introduction`, `# Methods`, `# Results`, `# Discussion`, `# Conclusion`, and `# Special Thanks` sections in that order
-
-`protocol.sg.md` scaffold rules:
-- create `# Steps` from protocol outline collected during init
-- each outline entry becomes one H2 step heading in the entered order
+- under `# Methods`, create a `## Protocol` subsection from protocol outline collected during init
+- each outline entry becomes one H3 step heading in the entered order
 - init requires at least one outline step; no placeholder step is synthesized
 
 ### `sg subject create`
@@ -268,7 +286,7 @@ Interactive session flow:
 1. Select subject(s) from global store using the same `Create Session` picker UI used by `sg sessions` create mode.
    That shared picker includes `(+) New subject` and `-> Create Session` actions; choosing `(+) New subject` completes subject creation and then immediately creates the session with that new subject.
 2. Create `session/<session-slug>/session.sg.md`.
-3. Parse `protocol.sg.md` steps.
+3. Parse protocol steps from `study.sg.md` `# Methods` → `## Protocol`.
 4. On step start: create step folder + `step.sg.md` and write `time_started`.
 5. On step advance: write previous step `time_finished`, then start next step.
 6. On finish: write current step `time_finished`.
@@ -386,21 +404,21 @@ Behavior:
 - prints resulting state (`reversed`) with session slug and step slug
 
 ### `sg protocol reconcile`
-Purpose: explicitly reconcile session step directory slugs to the current `protocol.sg.md`.
+Purpose: explicitly reconcile session step directory slugs to the current protocol in `study.sg.md`.
 
 Behavior:
 - non-interactive
-- parses `protocol.sg.md`
+- parses `study.sg.md`
 - renames existing session step directories to the current ordinal-based step slugs when the step ordinal still matches
 - preserves `step.sg.md` and `asset/` contents within renamed step directories
 - prints a success message when reconciliation completes
 
 ### `sg data ingest`
-Purpose: copy photo assets into matching step `asset/` folders by capture time.
+Purpose: copy captured media assets into matching step `asset/` folders by capture time.
 
 Input source:
 - default: query Photos Library SQLite metadata (`database/Photos.sqlite`) on macOS, then resolve matched assets from `originals/` on disk
-- optional: `--assets-dir <path>` recursively reads image files from a local directory (used for tests/dev; also valid on non-macOS)
+- optional: `--assets-dir <path>` recursively reads supported media files from a local directory (used for tests/dev; also valid on non-macOS)
 
 Session targeting:
 - non-interactive
@@ -408,8 +426,8 @@ Session targeting:
 - if any session is missing required timing fields, command fails with a clear session-scoped error
 
 Timestamp source precedence:
-1. EXIF capture time
-2. skip asset with warning if EXIF missing
+1. embedded capture timestamp metadata (EXIF for images; QuickTime/video creation metadata for supported video formats)
+2. skip asset with warning if capture timestamp metadata is missing
 
 Step windows:
 - non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
@@ -421,7 +439,9 @@ Ownership windows:
 
 Rules:
 - requires all step `time_started`; requires `time_finished` on last step
-- deterministic output filename: `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`
+- deterministic output filename: `<NN>-<YYYYMMDD-HHMMSS>_<sha8>.<ext>` where `NN` is the 0-based, zero-padded chronological index within that step
+- after each ingest run, step asset filenames are renumbered so the numeric prefix stays in capture-time order within each step; ties break by content hash
+- supported ingest media types are `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.tif`, `.tiff`, `.mov`, `.mp4`, and `.m4v`
 - in default Photos SQLite mode, candidate selection groups variants by logical Photos master asset id and keeps only the newest row by metadata modification/create time (so edited/rotated variants win over older originals)
 - before step matching, captured candidates that share the same sub-second EXIF capture instant are deduplicated; Photos render candidates (`resources/renders`) are preferred over non-render variants, then newest file modification time breaks ties
 - if the latest available asset capture time is older than the study's latest focus-window `time_finished`, ingestion prints an incomplete-sync warning and continues
@@ -472,14 +492,17 @@ Default outputs:
 - `<study-root>/publish/study.pdf`
 
 Flags:
+- `--once` runs a single publish pass and exits
 - `--with-subject-names` preserves real subject names in published outputs
 
 Behavior:
+- defaults to a continuous mode that watches study files/directories and re-runs publish when they change
 - best effort (do not fail just because data is incomplete)
 - run status checks first
 - if required sections/steps/fields are missing, set `study.sg.md` frontmatter `status: WIP`
 - include visible `WIP` indicator in generated outputs when incomplete
 - default published outputs anonymize session subjects using deterministic study-wide placeholders (`Subject 1`, `Subject 2`, ...)
+- publish also writes a local subject lookup file in the study root so the operator can map anonymized labels back to real names without exposing those names in the HTML/PDF outputs
 
 ## Publication Structure (v1)
 
@@ -509,7 +532,6 @@ All criteria below are pass/fail requirements for v1.
 2. Running `sg` with no args from a study root (or nested path) opens `sg sessions`.
 3. Running `sg init` in an empty directory creates:
 - `study.sg.md`
-- `protocol.sg.md`
 - `subject-requirements.yaml`
 - `session/`
 4. Re-running `sg init` does not destroy existing data files.
@@ -517,7 +539,7 @@ All criteria below are pass/fail requirements for v1.
 6. `sg init` is interactive and pre-fills study name from the current folder name (converting `-`/`_` to spaces and title-casing words).
 7. `study.sg.md` frontmatter includes `created_on` and does not include `name` or `updated_on`.
 8. The first H1 in `study.sg.md` equals the resolved study name from `sg init` (user-provided value, or derived folder-name default when left unchanged/blank).
-9. `sg init` accepts protocol step titles and writes each title as an H2 step under `# Steps` in `protocol.sg.md`.
+9. `sg init` accepts protocol step titles and writes each title as an H3 step under `study.sg.md` `# Methods` → `## Protocol`.
 10. `sg init` requires at least one protocol step before finishing the protocol-title prompt.
 
 ### B. Subject Store and Subject Commands
@@ -534,27 +556,32 @@ All criteria below are pass/fail requirements for v1.
 11. `sg subject edit <id-or-name>` updates a single subject interactively and preserves UUID/path.
 
 ### C. Protocol Parsing
-1. `protocol.sg.md` is accepted only when `# Protocol Summary` and `# Steps` exist.
-2. Step definitions are parsed from H2 headings under `# Steps`.
+1. `study.sg.md` is accepted only when `# Methods` contains a `## Protocol` subsection.
+2. Step definitions are parsed from H3 headings under `# Methods` → `## Protocol`.
 3. Step slugs are `<NN>-<kebab-step-name>` using protocol order (`NN` is zero-padded 1-based index).
 4. Parsing the study protocol reconciles existing session step directory names to the current ordinal-based step slugs.
-5. Optional step descriptions are parsed from markdown content directly under each H2 step heading.
-6. Step order in parsed output matches source order in `protocol.sg.md`.
+5. Optional protocol summary text is parsed from markdown content directly under `# Methods` before `## Protocol`.
+6. Optional step descriptions are parsed from markdown content directly under each H3 step heading.
+7. Step order in parsed output matches source order in `study.sg.md`.
 7. `sg protocol reconcile` explicitly triggers that same step-directory reconciliation and prints a success message.
-8. Publish output renders the `protocol.sg.md` summary content as a `Methods` section positioned between study `Introduction` and `Results`.
+8. Publish output renders the authored `# Methods` summary content and protocol step list from `study.sg.md` inside the `Methods` section positioned between study `Introduction` and `Results`.
+9. Publish output appends session result data beneath the `Results` section instead of rendering a separate top-level `Sessions` section.
+10. Publish output preserves authored study preamble content from between the title H1 and `# Introduction` before the `Introduction` section, without inventing a synthetic heading for it.
 
 ### D. Session Workflow and Timing
 1. `sg session` creates `session/<session-slug>/session.sg.md`.
 2. Session slug follows `<DD-MM-YYYY>-<subject-surname[-surname...]>`.
 3. Session subjects are derived from the `# Subjects` section lines in `session.sg.md` (one subject per line).
-4. Starting each step creates `step/<step-slug>/step.sg.md` with `time_started`.
-5. Advancing from one step to the next writes `time_finished` to the previous step.
-6. Finishing a session writes `time_finished` on the active/final step.
-7. Step times are written by `sg session` and never inferred from ingested media.
-8. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
+4. Creating a session precreates `step/<step-slug>/step.sg.md` plus `asset/` for every protocol step, with empty frontmatter until that step is started.
+5. Starting a step writes `time_started` into that existing `step/<step-slug>/step.sg.md`.
+6. Advancing from one step to the next writes `time_finished` to the previous step.
+7. Finishing a session writes `time_finished` on the active/final step.
+8. Step times are written by `sg session` and never inferred from ingested media.
+9. All step timestamps use `HH:MM:SS DD-MM-YYYY`.
 10. `sg sessions` supports autocomplete session lookup by subject name and session slug.
 11. In `sg sessions`, `Enter` applies to the selected row: it focuses that session if needed, then performs exactly one transition (`start`, `advance`, or `finish`) for that row.
 11a. `sg sessions` records focus ownership per step via `focus_windows` in step frontmatter; focus switches close the previous focused interval and open the next focused interval.
+11b. Protocol steps with `unfocusable: true` are excluded from the session-board progression experience: starting/advancing skips past them within the same action, and board progress counts/labels use only focusable steps.
 12. `sg sessions` allows creating a new session and then managing it in the same interactive flow.
 13. `sg session advance` works from within a session directory without requiring `cd` to other sessions.
 14. `sg session advance --session <slug>` advances a specific session from study root (or any path within the study).
@@ -576,7 +603,7 @@ All criteria below are pass/fail requirements for v1.
 1. `sg data ingest` is non-interactive and runs against all sessions in the study.
 2. Input source modes:
 - default mode reads assets from Apple Photos on macOS.
-- `--assets-dir <path>` mode reads image files recursively from local filesystem (supported on all OSes).
+- `--assets-dir <path>` mode reads supported media files recursively from local filesystem (supported on all OSes).
 3. `--assets-dir` is optional.
 4. Default mode requires an Apple Photos library package on disk and fails loudly with the checked paths when none are found.
    The default source path is configurable via `~/.study-guide/config` key `photos_library_path`.
@@ -585,12 +612,13 @@ All criteria below are pass/fail requirements for v1.
    That SQL selection deduplicates duplicate/edited metadata rows for the same logical master asset (using Photos master linkage) by keeping only the most recent metadata row.
    If configured source is not a Photos Library package with `database/Photos.sqlite`, default-mode ingestion fails; recursive filesystem ingestion is available only via `--assets-dir`.
    Unrecognized keys in `~/.study-guide/config` are ignored but emitted as warnings.
-5. EXIF capture time is used for matching; assets without EXIF are skipped with a warning.
+5. Embedded capture timestamp metadata is used for matching; assets without supported image/video capture metadata are skipped with a warning.
 6. In default mode with Photos Library package input, candidate files are discovered from SQLite metadata time fields (windowed by session step envelopes) before EXIF reads.
 6. Time-window matching rule is enforced:
 - non-last step: `[step.time_started, implied_or_explicit_step.time_finished]` where implied `time_finished = next_step.time_started - 1 second` when omitted
 - last step: `[last_step.time_started, last_step.time_finished]`
    Effective ownership for ingest uses `focus_windows` only; there is no ownership fallback to whole-step time windows.
+   Protocol steps authored with `unfocusable: true` are excluded from ingest ownership matching and do not require `focus_windows`.
 7. Assets are copied to the correct `step/<step-slug>/asset/` directory.
 8. Output names follow `<YYYYMMDD-HHMMSS>_<sha8>.<ext>`.
 9. Duplicate files are skipped based on content identity within each session.
@@ -621,17 +649,25 @@ All criteria below are pass/fail requirements for v1.
 ### G. Publish
 1. `sg publish` always attempts generation (best effort), even if data is incomplete.
 2. Default outputs are:
-- `<study-root>/publish/site/index.html`
-- `<study-root>/publish/study.pdf`
-3. Generated outputs include:
+- `<study-root>/publish/<study-folder-name>/site/index.html`
+- `<study-root>/publish/<study-folder-name>/study.pdf`
+- `<study-root>/subject-map.txt`
+3. `sg publish <destination-dir>` writes publish output beneath `<destination-dir>/<study-folder-name>/`.
+4. Generated outputs include:
 - study title + metadata
+- authored study preamble content from between the title H1 and `# Introduction`, preserved as authored before the `Introduction` section
+- optional study hero comparison rendered as two side-by-side images when `study.sg.md` frontmatter `hero_comparison` is present
+  - each side is resolved from `session` + `step` + `asset_index`
+  - `asset_index` is resolved against that step's sorted source asset list, not by filename
 - hypotheses, discussion, conclusion
 - protocol summary + step list
 - sessions in chronological order, including chrono-ordered thumbnails of photos
 - subject labels are anonymized by default in HTML and PDF outputs using deterministic study-wide placeholders (`Subject 1`, `Subject 2`, ...)
 - when subject names are anonymized, published web session paths/folder names must also be anonymized and must not reuse subject-derived study session slugs
+- when subject names are anonymized, publish also writes `<study-root>/subject-map.txt` listing each deterministic placeholder and its real subject name; this file is not part of the published site and is not linked from it
 - index-page thumbnails are published as separate derived image files rather than linking directly to full-size session assets
 - HTML-published images must be browser-displayable; HEIC/HEIF assets are published as rendered preview images rather than raw HEIC references
+- when a step sets `render_asset_indices`, publish renders only those step assets and in that explicit index order
 - page per session
   - compact single-line toolbar with link back to index, session start date (unlabeled), subject label, and image-size controls
     - navigation controls are normal links labeled `Up`, `Prev`, and `Next`
@@ -656,14 +692,42 @@ All criteria below are pass/fail requirements for v1.
   - only a single small separation between the toolbar and the column area
     - do not use both a header/content border and extra padding to create that separation
   - small vertical padding between photos in columns;
-4. `sg publish` runs status checks before rendering outputs.
-5. If required sections/steps/fields are missing, `study.sg.md` is updated to `status: WIP`.
-6. If incomplete, both HTML and PDF outputs visibly indicate `WIP` (but not as a global header)
-7. If complete, study status is not downgraded to `WIP`.
-8. If `protocol.sg.md` cannot be parsed, `sg publish` fails instead of silently rendering an empty protocol.
-9. `sg publish` reuses previously rendered HTML image assets when the publish output is already up to date, and does not re-render unchanged HEIC/HEIF previews.
-10. `sg publish` processes publish-image derivations concurrently so multiple HTML asset renders and index thumbnail renders can make progress in the same run.
-11. `sg publish --with-subject-names` preserves the real subject-name behavior in both HTML and PDF outputs.
+5. `sg publish` runs status checks before rendering outputs.
+6. If required sections/steps/fields are missing, `study.sg.md` is updated to `status: WIP`.
+7. If incomplete, both HTML and PDF outputs visibly indicate `WIP` (but not as a global header)
+8. If complete, study status is not downgraded to `WIP`.
+9. If `study.sg.md` protocol content cannot be parsed, `sg publish` fails instead of silently rendering an empty protocol.
+10. `sg publish` reuses previously rendered HTML image assets when the publish output is already up to date, and does not re-render unchanged HEIC/HEIF previews.
+11. `sg publish` processes publish-image derivations concurrently so multiple HTML asset renders and index thumbnail renders can make progress in the same run.
+12. `sg publish --with-subject-names` preserves the real subject-name behavior in both HTML and PDF outputs.
+13. `sg publish` defaults to continuous watch mode and re-runs on study file/directory changes; `--once` preserves the one-off publish behavior.
+
+### `sg export [<destination-dir>]`
+Exports an anonymized study snapshot by copying the study hierarchy into a destination directory.
+
+Behavior:
+- defaults to a continuous mode that watches study files/directories and re-runs export when they change
+- `--once` runs a single export pass and exits
+- defaults destination to `<study-root>/export`
+- writes the exported study snapshot beneath `<destination-dir>/<study-folder-name>/`
+- generates derived thumbnails in the exported snapshot
+- writes `<study-root>/subject-map.txt` listing each deterministic anonymized subject label and its real subject name
+- default thumbnail size is `144`
+- supports `--imgsize=x[,y,...]`; each requested size produces a derived image tree under each exported step's asset directory at `asset/img/<size>/`
+- copies the study hierarchy as files/directories rather than rendering HTML/PDF
+- preserves `study.sg.md`, `subject-requirements.yaml`, `session/`, step files, and non-HEIC assets
+- excludes raw `.heic`/`.heif` files from the exported snapshot while still generating derived JPEG images for them under each exported step's asset directory at `asset/img/<size>/`
+- does not copy derived output directories such as `publish/` or a pre-existing `export/`
+- does not copy unrelated repo/tooling directories or metadata such as `.git/`, nested `.git/`, `bin/`, or `.tmux.workspace`
+- anonymizes structured session subject references in exported `session.sg.md` files using deterministic study-wide labels (`Subject 1`, `Subject 2`, ...)
+- removes subject UUIDs from exported session subject lines
+- anonymizes exported session directory names to deterministic labels (`session-1`, `session-2`, ...) and rewrites `study.sg.md` frontmatter `active_session_slug` to the exported session slug when present
+- preserves protocol content inside exported `study.sg.md` `# Methods` → `## Protocol`
+- appends each exported session's structured data under `study.sg.md` section `# Results`, after any pre-existing results content
+- preserves existing non-`# Results` sections in `study.sg.md`, including authored `# Methods` content
+- when rebuilding into an existing export destination, temporarily moves the previous export aside into `/tmp` and reuses unchanged derived thumbnails from it while constructing the fresh snapshot
+- prints `exported at <HH:MM:SS DD-MM-YYYY> to <destination>` after each successful export pass, including continuous watch re-runs
+- leaves the source study unchanged
 
 ### H. Data Integrity and Safety
 1. Commands modify only files they are responsible for.
@@ -671,7 +735,28 @@ All criteria below are pass/fail requirements for v1.
 3. Frontmatter remains parseable YAML after every command.
 4. Existing user-authored markdown body content is preserved unless the command is explicitly responsible for that section.
 
-### I. Automated Testing
+### I. Export
+1. `sg export` defaults output to `<study-root>/export/<study-folder-name>/`.
+2. `sg export <destination-dir>` writes the exported study snapshot beneath `<destination-dir>/<study-folder-name>/`.
+3. Export output preserves the study hierarchy and copies source markdown and assets rather than rendering HTML or PDF.
+4. Export output excludes derived directories `publish/` and `export/`.
+5. Export output excludes unrelated repo/tooling directories or metadata such as `.git/`, nested `.git/`, `bin/`, and `.tmux.workspace`.
+6. Export anonymizes structured session subject references to deterministic study-wide labels and strips subject UUIDs from exported `session.sg.md`.
+7. Export anonymizes exported session directory names to deterministic `session-N` labels.
+8. Export rewrites `study.sg.md` frontmatter `active_session_slug` to the anonymized exported session slug when present.
+9. Exported `study.sg.md` preserves the protocol inside `# Methods` → `## Protocol`.
+10. Export appends each session's structured data beneath `study.sg.md` section `# Results`, after any pre-existing results content.
+11. Export preserves existing non-`# Results` sections in `study.sg.md`, including authored `# Methods` content.
+12. Export preserves authored study preamble markdown before `# Introduction`, including multiple paragraphs or optional italic notes when present.
+13. Export writes derived images under each exported step's asset directory at `asset/img/<size>/`.
+13. Export excludes raw `.heic`/`.heif` files from copied exported assets while still writing derived JPEG images for them under each exported step's asset directory at `asset/img/<size>/`.
+14. Re-running `sg export` against an existing destination may reuse unchanged derived images from the prior export while still replacing the exported snapshot with a fresh copy.
+15. `sg export` does not modify the source study files.
+16. `sg export` defaults to continuous watch mode and re-runs on study file/directory changes; `--once` preserves the one-off export behavior.
+17. Export writes `<study-root>/subject-map.txt` using the same deterministic anonymized subject labels used in exported session content.
+18. Each successful export pass prints `exported at <HH:MM:SS DD-MM-YYYY> to <destination>` using local time.
+
+### J. Automated Testing
 1. The repository includes real Go unit tests (`*_test.go`) for core behavior.
 2. At minimum, tests cover:
 - frontmatter read/write and key ordering guarantees

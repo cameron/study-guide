@@ -11,8 +11,7 @@ import (
 
 func TestCmdSessionsWithArgs_PrintOutputsSessionStepTimingTable(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## First Step\n\n## Second Step\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "First Step", "Second Step"))
 
 	mustWriteSessionFile(t, root, "01-01-2026-alpha", map[string]any{})
 	mustWriteStepFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-first-step", "step.sg.md"), map[string]any{

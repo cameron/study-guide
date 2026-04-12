@@ -171,6 +171,46 @@ func TestLoadStepWindows_RequiresFocusWindows(t *testing.T) {
 	}
 }
 
+func TestLoadStepWindows_IgnoresUnfocusableStepsForOwnership(t *testing.T) {
+	tmp := t.TempDir()
+	sessionDir := filepath.Join(tmp, "session", "s1")
+	protocol := store.Protocol{Steps: []store.ProtocolStep{
+		{Name: "A", Slug: "a"},
+		{Name: "B", Slug: "b"},
+		{Name: "C", Slug: "c"},
+	}}
+
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "a", "step.sg.md"), map[string]any{
+		"time_started": "10:00:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:00:00 01-01-2026", "time_finished": "10:04:59 01-01-2026"},
+		},
+	}, "# A\n")
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "b", "step.sg.md"), map[string]any{
+		"unfocusable": true,
+		"time_started": "10:05:00 01-01-2026",
+		"time_finished": "10:05:00 01-01-2026",
+	}, "# B\n")
+	mustWriteStepFile(t, filepath.Join(sessionDir, "step", "c", "step.sg.md"), map[string]any{
+		"time_started":  "10:05:00 01-01-2026",
+		"time_finished": "10:10:00 01-01-2026",
+		"focus_windows": []map[string]any{
+			{"time_started": "10:05:00 01-01-2026", "time_finished": "10:10:00 01-01-2026"},
+		},
+	}, "# C\n")
+
+	windows, err := loadStepWindows(sessionDir, protocol)
+	if err != nil {
+		t.Fatalf("loadStepWindows returned error: %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected 2 ownership windows from focusable steps, got %d", len(windows))
+	}
+	if windows[0].StepSlug != "a" || windows[1].StepSlug != "c" {
+		t.Fatalf("expected unfocusable step to be skipped, got %#v", windows)
+	}
+}
+
 func TestLoadStepWindows_ReportsMalformedExistingStepFile(t *testing.T) {
 	tmp := t.TempDir()
 	sessionDir := filepath.Join(tmp, "session", "s1")
@@ -428,6 +468,107 @@ func TestCmdIngestPhotos_AllSessions_FromAssetsDir(t *testing.T) {
 		t.Fatalf("cmdIngestPhotos second run error: %v", err)
 	}
 	assertAssetCount(t, studyRoot, sessionA, 3)
+}
+
+func TestCmdIngestPhotos_IncludesVideoFromAssetsDir(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
+
+	assetsDir := filepath.Join(tmp, "assets")
+	videoPath := filepath.Join(assetsDir, "ground-a.mov")
+	mustWriteFile(t, videoPath, "video-bytes")
+
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		if path != videoPath {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, "23:40:00 18-02-2026"), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if err := cmdIngestPhotos([]string{"--assets-dir", assetsDir}); err != nil {
+		t.Fatalf("cmdIngestPhotos error: %v", err)
+	}
+
+	assetRoot := filepath.Join(studyRoot, "session", "18-02-2026-boehmer", "step", "02-ground", "asset")
+	entries, err := os.ReadDir(assetRoot)
+	if err != nil {
+		t.Fatalf("ReadDir %s error: %v", assetRoot, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one ingested video asset, got %d", len(entries))
+	}
+	if got, want := filepath.Ext(entries[0].Name()), ".mov"; got != want {
+		t.Fatalf("expected ingested video extension %q, got %q (%s)", want, got, entries[0].Name())
+	}
+	if !strings.HasPrefix(entries[0].Name(), "00-20260218-234000_") {
+		t.Fatalf("expected managed video filename prefix, got %q", entries[0].Name())
+	}
+}
+
+func TestCmdIngestPhotos_RenumbersStepAssetPrefixesByChronologicalOrder(t *testing.T) {
+	tmp := t.TempDir()
+	studyRoot := filepath.Join(tmp, "study")
+	mustCopyDir(t, filepath.Join("..", "..", "..", "fixtures", "study-eg"), studyRoot)
+	mustPopulateFocusWindowsFromStepTimes(t, studyRoot)
+
+	earlyAssets := filepath.Join(tmp, "assets-early")
+	laterAssets := filepath.Join(tmp, "assets-later")
+	mustWriteFile(t, filepath.Join(earlyAssets, "ground-a.jpg"), "gamma-photo")
+	mustWriteFile(t, filepath.Join(laterAssets, "ground-a.jpg"), "gamma-photo")
+	mustWriteFile(t, filepath.Join(laterAssets, "first-a.jpg"), "alpha-photo")
+
+	assetTimes := map[string]string{
+		"first-a.jpg":  "23:25:00 18-02-2026",
+		"ground-a.jpg": "23:40:00 18-02-2026",
+	}
+	origCapture := exifCaptureTimeFn
+	exifCaptureTimeFn = func(path string) (time.Time, error) {
+		raw, ok := assetTimes[filepath.Base(path)]
+		if !ok {
+			return time.Time{}, errors.New("unexpected asset")
+		}
+		return mustParseTS(t, raw), nil
+	}
+	defer func() { exifCaptureTimeFn = origCapture }()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+	if err := os.Chdir(studyRoot); err != nil {
+		t.Fatalf("Chdir error: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	if err := cmdIngestPhotos([]string{"--assets-dir", earlyAssets}); err != nil {
+		t.Fatalf("cmdIngestPhotos first run error: %v", err)
+	}
+	assertStepAssetNames(t, studyRoot, "18-02-2026-boehmer", "02-ground", []string{
+		"00-20260218-234000_",
+	})
+
+	if err := cmdIngestPhotos([]string{"--assets-dir", laterAssets}); err != nil {
+		t.Fatalf("cmdIngestPhotos second run error: %v", err)
+	}
+	assertStepAssetNames(t, studyRoot, "18-02-2026-boehmer", "01-first-exposure", []string{
+		"00-20260218-232500_",
+	})
+	assertStepAssetNames(t, studyRoot, "18-02-2026-boehmer", "02-ground", []string{
+		"00-20260218-234000_",
+	})
 }
 
 func TestCmdIngestPhotos_WarnsAndContinuesPastIncompleteSessions(t *testing.T) {
@@ -949,6 +1090,66 @@ func TestCollectPhotosLibraryImageFilesBySQLite_MapsRowsToOriginalPaths(t *testi
 	}
 	if len(got) != 1 || got[0] != existing {
 		t.Fatalf("unexpected mapped originals from sqlite rows: %#v", got)
+	}
+}
+
+func TestCollectPhotosLibraryIngestFilesBySQLite_IncludesVideoPaths(t *testing.T) {
+	tmp := t.TempDir()
+	libraryRoot := filepath.Join(tmp, "Photos Library.photoslibrary")
+	originalsRoot := filepath.Join(libraryRoot, "originals")
+	if err := os.MkdirAll(filepath.Join(originalsRoot, "4"), 0o755); err != nil {
+		t.Fatalf("MkdirAll originals dir error: %v", err)
+	}
+	imagePath := filepath.Join(originalsRoot, "4", "A.heic")
+	videoPath := filepath.Join(originalsRoot, "4", "clip.mov")
+	mustWriteFile(t, imagePath, "a")
+	mustWriteFile(t, videoPath, "clip")
+
+	origQuery := runSQLiteQueryFn
+	runSQLiteQueryFn = func(dbPath, query string) (string, error) {
+		return "4|A.heic\n4|clip.mov\n", nil
+	}
+	defer func() { runSQLiteQueryFn = origQuery }()
+
+	got, err := collectPhotosLibraryIngestFilesBySQLite(
+		filepath.Join(libraryRoot, "database", "Photos.sqlite"),
+		originalsRoot,
+		mustParseTS(t, "10:00:00 01-01-2026"),
+		mustParseTS(t, "11:00:00 01-01-2026"),
+		0,
+	)
+	if err != nil {
+		t.Fatalf("collectPhotosLibraryIngestFilesBySQLite returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected image and video paths, got %#v", got)
+	}
+	if got[0] != imagePath || got[1] != videoPath {
+		t.Fatalf("unexpected mapped ingest files: %#v", got)
+	}
+}
+
+func TestExifToolCaptureTime_PrefersTimezoneAwareVideoCreateDate(t *testing.T) {
+	got, err := exifToolCaptureTimeFromReader(func(tag string) (string, error) {
+		switch tag {
+		case "SubSecDateTimeOriginal", "DateTimeOriginal":
+			return "", nil
+		case "CreationDate":
+			return "2026:04:05 21:20:36-06:00", nil
+		case "CreateDate":
+			return "2026:04:06 03:20:36", nil
+		case "SubSecCreateDate":
+			return "2026:04:06 03:20:36", nil
+		default:
+			return "", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("exifToolCaptureTimeFromReader error: %v", err)
+	}
+	want := mustParseTS(t, "21:20:36 05-04-2026")
+	if !got.Equal(want) {
+		t.Fatalf("capture time=%s want=%s", got.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }
 
@@ -1558,5 +1759,29 @@ func assertStepAssetCount(t *testing.T, studyRoot, sessionSlug, stepSlug string,
 	}
 	if got != want {
 		t.Fatalf("session %s step %s asset count=%d want=%d", sessionSlug, stepSlug, got, want)
+	}
+}
+
+func assertStepAssetNames(t *testing.T, studyRoot, sessionSlug, stepSlug string, wantPrefixes []string) {
+	t.Helper()
+	assetRoot := filepath.Join(studyRoot, "session", sessionSlug, "step", stepSlug, "asset")
+	entries, err := os.ReadDir(assetRoot)
+	if err != nil {
+		t.Fatalf("ReadDir %s error: %v", assetRoot, err)
+	}
+	got := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		got = append(got, e.Name())
+	}
+	if len(got) != len(wantPrefixes) {
+		t.Fatalf("session %s step %s asset names=%v want prefixes=%v", sessionSlug, stepSlug, got, wantPrefixes)
+	}
+	for i, prefix := range wantPrefixes {
+		if !strings.HasPrefix(got[i], prefix) {
+			t.Fatalf("session %s step %s asset[%d]=%q want prefix %q", sessionSlug, stepSlug, i, got[i], prefix)
+		}
 	}
 }

@@ -63,8 +63,7 @@ func TestRunDataIngest_FromAssetsDir(t *testing.T) {
 
 func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "Step One", "Step Two"))
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
 	mustWriteFile(t, filepath.Join(root, "session", "02-01-2026-beta", "step", "02-step-two", "asset", "z-last.jpg"), "a")
@@ -110,8 +109,7 @@ func TestRunDataLs_PrintsSortedRowsAndTotal(t *testing.T) {
 
 func TestRunDataLs_ReconcilesRenamedProtocolStepDirectoriesBeforeScanning(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Renamed Step\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "Renamed Step"))
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "asset", "sample.jpg"), "a")
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-original-step", "step.sg.md"), "---\ntime_started: 10:00:00 01-01-2026\n---\n")
@@ -148,8 +146,7 @@ func TestRunDataLs_ReconcilesRenamedProtocolStepDirectoriesBeforeScanning(t *tes
 
 func TestRunDataClean_RemovesAssetFilesAndKeepsMetadata(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "study.sg.md"), "---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n")
-	mustWriteFile(t, filepath.Join(root, "protocol.sg.md"), "# Protocol Summary\n\nSummary\n\n# Steps\n\n## Step One\n\n## Step Two\n\n")
+	mustWriteFile(t, filepath.Join(root, "study.sg.md"), injectProtocolIntoStudy("---\nstatus: WIP\ncreated_on: 10:00:00 01-01-2026\n---\n\n# Study\n\n# Introduction\n\n\n# Methods\n\n\n# Results\n\n\n# Discussion\n\n\n# Conclusion\n", "Summary", "Step One", "Step Two"))
 	mustWriteFile(t, filepath.Join(root, "subject-requirements.yaml"), "type: person\n")
 
 	mustWriteFile(t, filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "asset", "a-one.jpg"), "a")
@@ -179,7 +176,6 @@ func TestRunDataClean_RemovesAssetFilesAndKeepsMetadata(t *testing.T) {
 	assertAssetCount(t, root, "01-01-2026-alpha", 0)
 	for _, mustExist := range []string{
 		filepath.Join(root, "study.sg.md"),
-		filepath.Join(root, "protocol.sg.md"),
 		filepath.Join(root, "session", "01-01-2026-alpha", "session.sg.md"),
 		filepath.Join(root, "session", "01-01-2026-alpha", "step", "01-step-one", "step.sg.md"),
 	} {

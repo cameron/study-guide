@@ -1,3 +1,4 @@
+- when caching the previous build, use a /tmp location, not a folder near the target
 - anonymize subjects during publish
   - sg publish now anonymizes subject names in published output by default
   - sg publish --with-subject-names preserves the prior name-based publish output
@@ -30,3 +31,11 @@
 - sg data ingest
   - possible incomplete sync warning
     - warns when the latest available asset capture time is older than the study's latest focus window end
+- make sg publish/export automatically enter a continuous mode where it watches the study
+  files/dirs and re-runs as they change
+  - `sg publish` and `sg export` now default to `entr`-driven watch mode over study files/directories
+  - `--once` preserves the prior one-shot behavior and is used by the test suite for deterministic runs
+- simplify the study/protocol spec
+  - protocol storage now lives only in `study.sg.md`
+  - `# Methods` carries the summary text, `## Protocol` contains steps, and each step is a `###` heading
+  - updated parser/init/export expectations plus migrated fixtures/tests off `protocol.sg.md`

@@ -10,6 +10,18 @@ active_session_slug: ""
 
 # Methods
 
+Describe the protocol.
+
+## Protocol
+
+### preworkshop
+
+baseline measurement in the morning before the workshop practice session
+
+### postworkshop
+
+at the end of the first day
+
 # Results
 
 # Discussion

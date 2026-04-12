@@ -48,6 +48,12 @@ func TestCmdInit_BlankStudyNameFallsBackToFolderDerivedName(t *testing.T) {
 	if !strings.Contains(string(b), "\n# My Awesome Study\n") {
 		t.Fatalf("expected folder-derived study title in study.sg.md, got:\n%s", string(b))
 	}
+	if !strings.Contains(string(b), "\n## Protocol\n\n### Baseline\n") {
+		t.Fatalf("expected protocol steps in study.sg.md, got:\n%s", string(b))
+	}
+	if _, err := os.Stat(filepath.Join(studyDir, "protocol.sg.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected no protocol.sg.md scaffold, stat err=%v", err)
+	}
 }
 
 func TestCmdInit_RequiresAtLeastOneProtocolStep(t *testing.T) {
